@@ -8,8 +8,6 @@ import * as fs from "fs"
 import * as path from "path"
 import { writeToStream } from '@fast-csv/format';
 import pg from "pg"
-import supercopy from "@wmfs/supercopy";
-import HlPgClient from "@wmfs/hl-pg-client"
 import pluralize from "pluralize"
 import Graph from "graph-data-structure";
 
@@ -46,11 +44,8 @@ async function main() {
     options.rowCount ? parseInt(options.rowCount, 10) : RowCount,
   );
 
-  process.env.PG_CONNECTION_STRING = options.connString;
-  // this is not well documented. almost certainly shouldn't be used...
-  //const client = new pg.Client(options.connString)
-  const client = new HlPgClient(options.connString)
-
+  const client = new pg.Client(options.connString);
+  await client.connect()
 
   const order = graph.topologicalSort(graph.nodes());
 
@@ -80,31 +75,7 @@ async function main() {
     await client.end();
   }
   // TODO flag to disable this
-  cleanup();
-
-  //  const order = graph.topologicalSort(graph.nodes());
-  // also doesn't srot
-  // this is not dependable. bye
-  // supercopy(
-  //   {
-  //     // we want to pass 1 above inserts...
-  //     sourceDir: path.join(dir, ".."),
-  //     headerColumnNamePkPrefix: '.', 
-  //     // TODO...
-  //     topDownTableOrder: ['users', 'contacts'],
-  //     client: client,
-  //     schemaName: 'public',
-  //     //      truncateTables: true,
-  //     debug: true,
-  //     //      multicopy: false,
-  //   },
-  //   function (err) {
-  //     // Done!
-  //     console.log(err, 'done!')
-
-  //     client.end();
-  //   }
-  // )
+  //  cleanup();
 }
 
 
@@ -282,14 +253,6 @@ async function readDataAndWriteFiles(
       } while (start > 0);
     }
 
-    //    there's a fkey, let's change tactics
-    // we still want the 100k rows. let's break it up 
-    // 1 with 50k (whale...)
-    // everything else gets us to 105k
-    // 1 with 10k
-    // 1 with 9l
-    // 3 with 
-    //10 + 1
     globalRows.set(info.tableName, rows);
   }
 
@@ -302,11 +265,7 @@ async function readDataAndWriteFiles(
       continue;
     }
 
-    // if (!info.generate) {
-    //   continue;
-    // }
     const writeStream = fs.createWriteStream(info.path);
-    //    const rows = globalRows.get(info.tableName) || [];
 
     promises.push(
       new Promise((resolve, reject) => {
