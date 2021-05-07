@@ -36,12 +36,27 @@ describe("strings", () => {
   })
 
   test("email", async () => {
-    const val = await testString("email_address", { name: "email_Address" })
+    const val = await testString("email_address", { name: "email_address" })
+    expect(val.indexOf("@email.com")).toBeGreaterThan(0)
+  })
+
+  test("email at end", async () => {
+    const val = await testString("primary_email", { name: "primary_email" })
     expect(val.indexOf("@email.com")).toBeGreaterThan(0)
   })
 
   test("phone number", async () => {
     const val = await testString("phone_number", { name: "phone_number" })
+    expect(val.indexOf("+1")).toBe(0)
+  })
+
+  test("phone number at end", async () => {
+    const val = await testString("secondary_phone_number", { name: "secondary_phone_number" })
+    expect(val.indexOf("+1")).toBe(0)
+  })
+
+  test("phone", async () => {
+    const val = await testString("phone", { name: "phone" })
     expect(val.indexOf("+1")).toBe(0)
   })
 

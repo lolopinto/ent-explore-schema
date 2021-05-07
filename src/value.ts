@@ -107,7 +107,7 @@ const emailType = {
   newValue: () => {
     return EmailType({ name: "foo" }).format(randomEmail());
   },
-  regex: /^email(_address)/,
+  regex: /^email(_address)|_email$/,
 };
 
 const pdt = PhoneNumberType({ name: "foo" });
@@ -120,7 +120,7 @@ const phoneType = {
     }
     return pdt.format(p);
   },
-  regex: /^phone(_number)?/,
+  regex: /^phone(_number)?|_phone$|_phone_number$/,
 };
 
 const passwordType = {
