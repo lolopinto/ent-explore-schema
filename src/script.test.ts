@@ -185,3 +185,47 @@ test("enum table with dbrows", async () => {
     doTest: confirm,
   })
 })
+
+test("enum type", async () => {
+  const values = ["'UNVERIFIED'", "'VERIFIED'", "'DEACTIVATED'", "'DISABLED'"];
+
+  // TODO support these in temp_db
+  //  https://github.com/lolopinto/ent/issues/297
+  const fakeEnumTable: Table = {
+    name: "user_status",
+    columns: [],
+    drop() {
+      return `DROP TYPE user_status`;
+    },
+    create() {
+      return `CREATE TYPE user_status as ENUM(${values.join(", ")})`;
+    },
+  }
+  const enumTypeCol = {
+    name: "status",
+    datatype() {
+      return 'user_status'
+    },
+  };
+
+  const userTable = table("users",
+    uuid("id", { primaryKey: true }),
+    timestamp("created_at"),
+    timestamp("updated_at"),
+    text("first_name"),
+    text("last_name"),
+    enumTypeCol,
+  );
+
+  await doTest({
+    tables: [fakeEnumTable, userTable],
+    path: "fixtures/with_enum_type",
+    rowCount: 10,
+    doTest: async (pool: Client) => {
+      const r = await pool.query("SELECT count(1) from users")
+      expect(r.rowCount).toBe(1)
+      const row = r.rows[0];
+      expect(row.count).toBe("10")
+    }
+  })
+})

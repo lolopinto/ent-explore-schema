@@ -84,7 +84,8 @@ export async function getValue(f: Field, col: string): Promise<any> {
       return Math.floor(Math.random() * 100000000);
     case DBType.Float:
       return Math.random() * 100000000;
-    case DBType.Enum, DBType.StringEnum:
+    case DBType.Enum:
+    case DBType.StringEnum:
       if (typ.values) {
         const idx = Math.floor(Math.random() * typ.values.length);
         return typ.values[idx]
