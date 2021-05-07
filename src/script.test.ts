@@ -145,3 +145,17 @@ test("restrict without dependency included", async () => {
     }
   })
 })
+
+test("tsconfig", async () => {
+  await doTest({
+    tables: getBaseUserTable(),
+    path: "fixtures/with_tsconfig/src/schema",
+    rowCount: 10,
+    doTest: async (pool: Client) => {
+      const r = await pool.query("SELECT count(1) from users")
+      expect(r.rowCount).toBe(1)
+      const row = r.rows[0];
+      expect(row.count).toBe("10")
+    }
+  })
+})

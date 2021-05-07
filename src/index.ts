@@ -17,6 +17,19 @@ const scriptPath = "./node_modules/@lolopinto/ent/scripts/read_schema";
 const RowCount = 100;
 
 let restrict: Map<string, boolean> | undefined;
+
+function findTsConfigJSONFile(dirPath: string): string | undefined {
+  while (dirPath != '/') {
+    const check = path.join(dirPath, 'tsconfig.json');
+    if (fs.existsSync(check)) {
+      return check;
+    }
+    dirPath = path.join(dirPath, '..');
+  }
+
+  return undefined;
+}
+
 async function main() {
   const options = minimist(process.argv.slice(2));
 
@@ -135,11 +148,16 @@ async function readDataAndWriteFiles(
   dir: string,
   rowCount: number,
 ): Promise<[Map<string, Info>, any, Map<string, Data[]>]> {
-  const result = execSync(`ts-node ${scriptPath} --path ${schemaPath}`);
+  const parts: any[] = ['ts-node'];
+  let tsconfigPath = findTsConfigJSONFile(schemaPath);
+  if (tsconfigPath !== undefined) {
+    parts.push("--project", tsconfigPath, "-r", "./node_modules/tsconfig-paths/register")
+  }
+  parts.push(scriptPath, '--path', schemaPath);
+  //  parts.push()
+  const result = execSync(parts.join(" "));
   const nodes = JSON.parse(result.toString());
 
-  //  console.log(nodes);
-  //  return [];
   const infos: Map<string, Info> = new Map();
 
   let graph = Graph();
@@ -148,15 +166,10 @@ async function readDataAndWriteFiles(
   // parse and gather data step
   for (const key in nodes) {
     graph.addNode(key)
-    //    console.log(key);
     let generate = true;
     if (restrict && !restrict.has(key)) {
       generate = false;
-      //continue
     }
-    // if (key != "User" && key != "Contact") {
-    //   continue
-    // }
 
     const tableName = pluralize(snakeCase(key))
     const filePath = path.join(dir, `${tableName}.csv`)
@@ -168,7 +181,6 @@ async function readDataAndWriteFiles(
       const col = getDbCol(f);
       cols.push(col)
       if (f.foreignKey != null) {
-        console.log(f.name, f.foreignKey)
         graph.addEdge(f.foreignKey.schema, key)
 
         if (f.type.dbType === DBType.UUID) {
@@ -193,7 +205,6 @@ async function readDataAndWriteFiles(
   }
 
   const order = graph.topologicalSort(graph.nodes());
-  console.log(order)
 
   // need rows to be global based on order here...
   let promises: Promise<any>[] = [];
@@ -245,7 +256,6 @@ async function readDataAndWriteFiles(
           partialRow[deps3.col] = val;
         }
 
-        console.log(partialRow)
         for (let j = 0; j < start; j++) {
           const row = await getRow(fields, partialRow);
           rows.push(row);
