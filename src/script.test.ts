@@ -1,7 +1,6 @@
 import { Table, table, TempDB, text, timestamp, uuid } from "@lolopinto/ent/testutils/db/test_db"
 import { execSync } from "child_process"
 import * as path from "path"
-import { DB, DenyIfEdgeDoesNotExistRule } from "@lolopinto/ent"
 import { Client } from "pg"
 
 let tdb: TempDB;
@@ -20,8 +19,9 @@ interface Test {
   // will be dropped in reverse order...
   tables: Table | Table[];
   path: string;
-  doTest: (pool: Client) => Promise<void>,
-  rowCount?: number,
+  doTest: (pool: Client) => Promise<void>;
+  rowCount?: number;
+  restrict?: string;
 }
 
 async function doTest(t: Test) {
@@ -49,6 +49,9 @@ async function doTest(t: Test) {
     if (t.rowCount) {
       parts.push('--rowCount', t.rowCount);
     }
+    if (t.restrict) {
+      parts.push('--restrict', t.restrict)
+    }
     execSync(parts.join(" "))
 
     const client = tdb.getDBClient();
@@ -73,6 +76,21 @@ function getBaseUserTable() {
   );
 }
 
+function getForeignKeyTables() {
+  // this sadly has to be created separately from the fixtures (for now...)
+  const userTable = getBaseUserTable();
+  const contactsTable = table("contacts",
+    uuid("id", { primaryKey: true }),
+    timestamp("created_at"),
+    timestamp("updated_at"),
+    text("first_name"),
+    text("last_name"),
+    uuid("user_id", { foreignKey: { table: "users", col: "id" } })
+  );
+
+  return [userTable, contactsTable];
+}
+
 test("simple schema", async () => {
   await doTest({
     tables: getBaseUserTable(),
@@ -88,19 +106,8 @@ test("simple schema", async () => {
 })
 
 test("foreign key schema", async () => {
-  // this sadly has to be created separately from the fixtures (for now...)
-  const userTable = getBaseUserTable();
-  const contactsTable = table("contacts",
-    uuid("id", { primaryKey: true }),
-    timestamp("created_at"),
-    timestamp("updated_at"),
-    text("first_name"),
-    text("last_name"),
-    uuid("user_id", { foreignKey: { table: "users", col: "id" } })
-  );
-
   await doTest({
-    tables: [userTable, contactsTable],
+    tables: getForeignKeyTables(),
     path: "fixtures/foreign_key",
     rowCount: 10,
     doTest: async (pool: Client) => {
@@ -111,8 +118,30 @@ test("foreign key schema", async () => {
 
       const r2 = await pool.query("SELECT count(1) from contacts")
       expect(r2.rowCount).toBe(1)
-      const row2 = r.rows[0];
-      expect(parseInt(row2.count, 10)).toBe(10);
+      const row2 = r2.rows[0];
+      expect(parseInt(row2.count, 10)).toBeGreaterThanOrEqual(10);
+    }
+  })
+})
+
+test("restrict without dependency included", async () => {
+  await doTest({
+    tables: getForeignKeyTables(),
+    path: "fixtures/foreign_key",
+    rowCount: 10,
+    // only do contact. we'll load some users because contacts needs it
+    restrict: "Contact",
+    doTest: async (pool: Client) => {
+      const r = await pool.query("SELECT count(1) from users")
+      expect(r.rowCount).toBe(1)
+      const row = r.rows[0];
+      expect(row.count).toBe("4")
+
+      const r2 = await pool.query("SELECT count(1) from contacts")
+      expect(r2.rowCount).toBe(1)
+      const row2 = r2.rows[0];
+      // we doing the ceiling approach so may end up with slightly more than one...
+      expect(parseInt(row2.count, 10)).toBeGreaterThanOrEqual(10);
     }
   })
 })

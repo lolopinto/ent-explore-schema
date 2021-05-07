@@ -75,7 +75,7 @@ async function main() {
     await client.end();
   }
   // TODO flag to disable this
-  //  cleanup();
+  cleanup();
 }
 
 
@@ -232,7 +232,7 @@ async function readDataAndWriteFiles(
       let start = rowCount;
       let i = -1;
       do {
-        start = Math.floor(start / 2);
+        start = Math.ceil(start / 2);
         i++;
         let partialRow = {};
         for (const deps3 of deps2) {
@@ -250,7 +250,7 @@ async function readDataAndWriteFiles(
           const row = await getRow(fields, partialRow);
           rows.push(row);
         }
-      } while (start > 0);
+      } while (start > 1);
     }
 
     globalRows.set(info.tableName, rows);
