@@ -19,6 +19,7 @@ interface Test {
   // will be dropped in reverse order...
   tables: Table | Table[];
   path: string;
+  preTest?: (pool: Client) => Promise<void>;
   doTest: (pool: Client) => Promise<void>;
   rowCount?: number;
   restrict?: string;
@@ -36,6 +37,11 @@ async function doTest(t: Test) {
     await tdb.create(...tables)
 
     const connString = process.env.DB_CONNECTION_STRING;
+    const client = tdb.getDBClient();
+
+    if (t.preTest) {
+      await t.preTest(client)
+    }
 
     const schemaPath = path.join(__dirname, t.path);
     const parts: any[] = [
@@ -54,7 +60,6 @@ async function doTest(t: Test) {
     }
     execSync(parts.join(" "))
 
-    const client = tdb.getDBClient();
     await t.doTest(client);
   } catch (err) {
     fail(err)
@@ -74,6 +79,10 @@ function getBaseUserTable() {
     text("first_name"),
     text("last_name"),
   );
+}
+
+function getRequestOutcomeTable() {
+  return table("request_outcomes", text("outcome", { primaryKey: true }))
 }
 
 function getForeignKeyTables() {
@@ -157,5 +166,22 @@ test("tsconfig", async () => {
       const row = r.rows[0];
       expect(row.count).toBe("10")
     }
+  })
+})
+
+test("enum table with dbrows", async () => {
+  const confirm = async (pool: Client) => {
+    const r = await pool.query("SELECT count(1) from request_outcomes")
+    expect(r.rowCount).toBe(1)
+    const row = r.rows[0];
+    // expect 0 because we're not doing anything here.
+    // just assume that in real life, ent framework handles this
+    expect(row.count).toBe("0")
+  }
+  await doTest({
+    tables: getRequestOutcomeTable(),
+    path: "fixtures/enum_with_dbrows",
+    preTest: confirm,
+    doTest: confirm,
   })
 })

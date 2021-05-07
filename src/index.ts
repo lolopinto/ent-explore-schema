@@ -175,7 +175,15 @@ async function readDataAndWriteFiles(
     const filePath = path.join(dir, `${tableName}.csv`)
     const obj = nodes[key] as Schema;
     const fields = obj.fields as Field[];
-    const cols: string[] = []
+    const cols: string[] = [];
+
+    // we have rows we want added by default
+    // for now, let's just do nothing and assume that the ent framework
+    // has correctly handled this
+    // most use cases is enums but could be other things too...
+    if (obj.dbRows) {
+      generate = false;
+    }
     for (const f of fields) {
 
       const col = getDbCol(f);
