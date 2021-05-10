@@ -19,11 +19,17 @@ function randomEmail(domain?: string): string {
 }
 
 function randomPhoneNumber(): string {
-  const phone = Math.random()
+  let phone = Math.random()
     .toString(10)
-    .substring(2, 12);
+    .substring(2, 11);
+
+  // always put a leading 1
+  phone = "1" + phone;
   const phoneNumber = parsePhoneNumberFromString(phone, "US");
-  return phoneNumber!.format("E.164");
+  if (!phoneNumber) {
+    throw new Error(`parsePhoneNumber returned invalid phone number ${phone}`)
+  }
+  return phoneNumber.format("E.164");
 }
 
 function coinFlip() {
@@ -130,7 +136,7 @@ const emailType = {
   regex: /^email(_address)|_email$/,
 };
 
-const pdt = PhoneNumberType({ name: "foo" });
+const pdt = PhoneNumberType({ name: "foo" }).validateForRegion(false);
 const phoneType = {
   dbType: DBType.String,
   newValue: () => {
