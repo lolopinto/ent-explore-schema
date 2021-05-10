@@ -1,5 +1,5 @@
 import { parsePhoneNumberFromString } from "libphonenumber-js";
-import { DBType, Field, Type } from "@lolopinto/ent/schema"
+import { DBType, Field, Schema, Type } from "@lolopinto/ent/schema"
 import { v4 } from "uuid";
 import { DateType, TimeType, TimetzType, TimestampType, TimestamptzType, } from "@lolopinto/ent/schema"
 import { EmailType } from "@lolopinto/ent-email"
@@ -51,7 +51,11 @@ async function specialType(typ: Type, col: string) {
   return undefined;
 }
 
-export async function getValue(f: Field, col: string): Promise<any> {
+interface Info {
+  schema: Schema;
+}
+
+export async function getValue(f: Field, col: string, infos?: Map<string, Info>): Promise<any> {
   // half the time, return null for nullable
   if (f.nullable && coinFlip()) {
     return null;
@@ -90,7 +94,22 @@ export async function getValue(f: Field, col: string): Promise<any> {
         const idx = Math.floor(Math.random() * typ.values.length);
         return typ.values[idx]
       }
-      console.log(typ)
+      if (f.foreignKey) {
+        const schema = f.foreignKey.schema;
+        const col = f.foreignKey.column;
+        if (!infos) {
+          throw new Error(`infos required for enum with foreignKey`)
+        }
+        const info = infos.get(schema)
+        if (!info) {
+          throw new Error(`couldn't load data for schema ${schema}`)
+        }
+        if (!info.schema.dbRows) {
+          throw new Error(`no dbRows for schema ${schema}`)
+        }
+        const idx = Math.floor(Math.random() * info.schema.dbRows.length);
+        return info.schema.dbRows[idx][col];
+      }
       throw new Error("TODO: enum without values not currently supported");
     default:
       throw new Error(`unsupported type ${typ.dbType}`)

@@ -101,7 +101,7 @@ function getDbCol(field: Field): string {
   return field.storageKey || getDbColFromName(field.name);
 }
 
-async function getRow(fields: Field[], partial?: {}, derivedIDType?: string): Promise<Data> {
+async function getRow(fields: Field[], infos: Map<string, Info>, partial?: {}, derivedIDType?: string): Promise<Data> {
   partial = partial || {};
   const ret = {};
   for (const field of fields) {
@@ -109,7 +109,7 @@ async function getRow(fields: Field[], partial?: {}, derivedIDType?: string): Pr
     if (partial[col] !== undefined) {
       ret[col] = partial[col];
     } else {
-      ret[col] = await getValue(field, col);
+      ret[col] = await getValue(field, col, infos);
     }
 
     if (field.derivedFields) {
@@ -363,7 +363,7 @@ async function readDataAndWriteFiles(
     if (!deps2) {
       // no dep
       for (let i = 0; i < rowCount; i++) {
-        const row = await getRow(fields);
+        const row = await getRow(fields, infos);
         rows.push(row);
       }
     } else {
@@ -374,7 +374,7 @@ async function readDataAndWriteFiles(
       if (unique) {
         for (let i = 0; i < rowCount; i++) {
           const { partialRow, derivedIDType } = await getPartialRow(deps2, info, infos, globalRows, i);
-          const row = await getRow(fields, partialRow, derivedIDType);
+          const row = await getRow(fields, infos, partialRow, derivedIDType);
           rows.push(row);
         }
       } else {
@@ -388,7 +388,7 @@ async function readDataAndWriteFiles(
           const { partialRow, derivedIDType } = await getPartialRow(deps2, info, infos, globalRows, i);
 
           for (let j = 0; j < start; j++) {
-            const row = await getRow(fields, partialRow, derivedIDType);
+            const row = await getRow(fields, infos, partialRow, derivedIDType);
             rows.push(row);
           }
         } while (start > 1);
@@ -442,10 +442,6 @@ function findStarSchema(infos: Map<string, Info>) {
     }
     // found schema...
     if (info.cols.find((v) => v == "id") !== undefined) {
-      // TODO...
-      if (schema === "Request") {
-        continue;
-      }
       //                console.log('found schema', schema)
       return schema;
     }
@@ -474,7 +470,7 @@ async function getRowFor(
   }
   // dependency...
   // create a new one...
-  const newRow = await getRow(info.schema.fields, undefined, derivedIDType);
+  const newRow = await getRow(info.schema.fields, infos, undefined, derivedIDType);
   rows.push(newRow);
   globalRows.set(info.tableName, rows)
   return newRow;

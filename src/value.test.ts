@@ -1,4 +1,4 @@
-import { IntegerType, FieldOptions, StringOptions, StringType, TimestampType, FloatType, BooleanType, UUIDType, TimeType, TimetzType, TimestamptzType, DateType, EnumType } from "@lolopinto/ent";
+import { IntegerType, FieldOptions, StringOptions, StringType, TimestampType, FloatType, BooleanType, UUIDType, TimeType, TimetzType, TimestamptzType, DateType, EnumType, Schema, Field } from "@lolopinto/ent";
 import bcryptjs from "bcryptjs"
 import { getValue } from "./value";
 import { validate as validateUUid } from "uuid"
@@ -138,4 +138,57 @@ test("enum", async () => {
   const val = await getValue(typ, "col");
   expect(typeof val).toBe("string");
   expect(values.indexOf(val)).toBeGreaterThanOrEqual(0)
+})
+
+describe("fkey enum", () => {
+
+  test("valid", async () => {
+    class RequestStatus implements Schema {
+      fields: Field[] = [
+        StringType({
+          name: "status",
+          primaryKey: true,
+        }),
+      ];
+
+      enumTable = true;
+
+      dbRows = [
+        {
+          status: "OPEN",
+        },
+        {
+          status: "PENDING_FULFILLMENT",
+        },
+        {
+          status: "CLOSED",
+        },
+      ];
+    }
+
+    const typ = EnumType({ name: "foo", foreignKey: { schema: "RequestStatus", column: "status" } })
+
+    const m = new Map<string, {
+      schema: Schema,
+    }>();
+    m.set("RequestStatus", {
+      schema: new RequestStatus()
+    })
+    const val = await getValue(typ, "col", m);
+    expect(typeof val).toBe("string");
+    expect(["OPEN", "PENDING_FULFILLMENT", "CLOSED"].indexOf(val)).toBeGreaterThanOrEqual(0)
+  });
+
+  test("invalid", async () => {
+    const typ = EnumType({ name: "foo", foreignKey: { schema: "RequestStatus", column: "status" } })
+
+
+    try {
+      await getValue(typ, "col");
+      fail("should have thrown")
+    } catch (err) {
+      expect(err.message).toMatch(/infos required for enum with foreignKey/)
+    }
+  })
+
 })
