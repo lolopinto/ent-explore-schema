@@ -58,7 +58,8 @@ async function doTest(t: Test) {
     if (t.restrict) {
       parts.push('--restrict', t.restrict)
     }
-    execSync(parts.join(" "))
+    const r = execSync(parts.join(" "));
+    //    console.log(r)
 
     await t.doTest(client);
   } catch (err) {
@@ -81,14 +82,8 @@ function getBaseUserTable() {
   );
 }
 
-function getRequestOutcomeTable() {
-  return table("request_outcomes", text("outcome", { primaryKey: true }))
-}
-
-function getForeignKeyTables() {
-  // this sadly has to be created separately from the fixtures (for now...)
-  const userTable = getBaseUserTable();
-  const contactsTable = table("contacts",
+function getContactsTable() {
+  return table("contacts",
     uuid("id", { primaryKey: true }),
     timestamp("created_at"),
     timestamp("updated_at"),
@@ -96,8 +91,31 @@ function getForeignKeyTables() {
     text("last_name"),
     uuid("user_id", { foreignKey: { table: "users", col: "id" } })
   );
+}
 
-  return [userTable, contactsTable];
+function getRequestOutcomeTable() {
+  return table("request_outcomes", text("outcome", { primaryKey: true }))
+}
+
+function getForeignKeyTables() {
+  // this sadly has to be created separately from the fixtures (for now...)
+
+  return [getBaseUserTable(), getContactsTable()];
+}
+
+function getAddressesTable() {
+  return table("addresses",
+    uuid("id", { primaryKey: true }),
+    timestamp("created_at"),
+    timestamp("updated_at"),
+    text("street"),
+    text("city"),
+    text("state"),
+    text("zip_code"),
+    text("apartment", { nullable: true }),
+    uuid("owner_id"),
+    text("owner_type"),
+  );
 }
 
 test("simple schema", async () => {
@@ -227,5 +245,36 @@ test("enum type", async () => {
       const row = r.rows[0];
       expect(row.count).toBe("10")
     }
+  })
+})
+
+describe("polymorphic", () => {
+  test("polymorphic. boolean", async () => {
+    await doTest({
+      tables: [getBaseUserTable(), getAddressesTable()],
+      path: "fixtures/polymorphic_star",
+      rowCount: 10,
+      doTest: async (pool: Client) => {
+        const r = await pool.query("SELECT count(1) from addresses");
+        expect(r.rowCount).toBe(1);
+        const row = r.rows[0];
+        expect(parseInt(row.count, 10)).toBeGreaterThanOrEqual(10)
+      }
+    })
+  })
+
+  test("polymorphic. types", async () => {
+    await doTest({
+      tables: [getBaseUserTable(), getAddressesTable(), getContactsTable()],
+      path: "fixtures/polymorphic_types",
+      rowCount: 10,
+      doTest: async (pool: Client) => {
+        const r = await pool.query("SELECT * from addresses");
+        expect(r.rowCount).toBeGreaterThanOrEqual(10);
+        for (const r2 of r.rows) {
+          expect(r2.owner_type).toMatch(/User|Contact/);
+        }
+      }
+    })
   })
 })

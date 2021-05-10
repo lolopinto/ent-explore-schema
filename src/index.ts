@@ -3,6 +3,7 @@ import { execSync } from "child_process"
 import { getValue } from "./value"
 import { DBType, Field, Schema } from "@lolopinto/ent/schema";
 import { snakeCase } from "snake-case";
+import { pascalCase } from "pascal-case"
 import { Data } from "@lolopinto/ent";
 import * as fs from "fs"
 import * as path from "path"
@@ -10,6 +11,7 @@ import { writeToStream } from '@fast-csv/format';
 import pg from "pg"
 import pluralize from "pluralize"
 import Graph from "graph-data-structure";
+import { inspect } from "util"
 
 const scriptPath = "./node_modules/@lolopinto/ent/scripts/read_schema";
 
@@ -58,7 +60,7 @@ async function main() {
   );
 
   const client = new pg.Client(options.connString);
-  await client.connect()
+  await client.connect();
 
   const order = graph.topologicalSort(graph.nodes());
 
@@ -78,9 +80,8 @@ async function main() {
 
       console.log(generateQuery(info))
       await client.query(generateQuery(info))
-      await client.query('COMMIT')
-
     }
+    await client.query('COMMIT')
   } catch (err) {
     await client.query("ROLLBACK");
     console.error('err: ', err)
@@ -100,7 +101,7 @@ function getDbCol(field: Field): string {
   return field.storageKey || getDbColFromName(field.name);
 }
 
-async function getRow(fields: Field[], partial?: {}): Promise<Data> {
+async function getRow(fields: Field[], partial?: {}, derivedIDType?: string): Promise<Data> {
   partial = partial || {};
   const ret = {};
   for (const field of fields) {
@@ -109,6 +110,32 @@ async function getRow(fields: Field[], partial?: {}): Promise<Data> {
       ret[col] = partial[col];
     } else {
       ret[col] = await getValue(field, col);
+    }
+
+    if (field.derivedFields) {
+      let type: string;
+      if (field.name.endsWith("_id")) {
+        let idx = field.name.indexOf("_id");
+        type = field.name.substring(0, idx) + "_type";
+
+      } else if (field.name.endsWith("ID")) {
+        let idx = field.name.indexOf("ID");
+        type = field.name.substring(0, idx) + "Type";
+      } else {
+        throw new Error(`unsupported field ${field.name} with derived fields`)
+      }
+      for (const f2 of field.derivedFields) {
+        if (f2.name !== type) {
+          throw new Error(`unsupported derived field with name ${f2.name}`)
+        }
+        if (!derivedIDType) {
+          //          console.log(ret, partial)
+          //          console.trace()
+
+          throw new Error(`cannot set field ${f2.name} without derivedIDType being passed in ${inspect(ret, undefined, 4)} ${inspect(partial, undefined, 4)}`);
+        }
+        ret[getDbCol(f2)] = derivedIDType;
+      }
     }
   }
   return ret;
@@ -137,7 +164,7 @@ interface Info {
 }
 
 interface dependency {
-  schema: string;
+  schema: string | string[]; // * wildcard, randomly pick one...
   col: string;
   inverseCol: string;
 }
@@ -201,7 +228,53 @@ async function readDataAndWriteFiles(
           deps.set(key, deps2)
         }
       }
+
+      //      console.log(f.name, key)
+      if (f.polymorphic) {
+        //        console.log('polymorphic', typeof f.polymorphic)
+        // just polymorphic so any field goes here...
+        let schema: string | string[] | undefined;
+        if (typeof f.polymorphic === "boolean") {
+          //          console.log("schema *")
+          schema = "*";
+        } else if (f.polymorphic.types) {
+          //          console.log(f.polymorphic)
+          schema = [];
+          for (const typ of f.polymorphic.types) {
+            // convert nodeType to Schema name e.g. user -> User, address -> Address
+            const pascalTyp = pascalCase(typ);
+            schema.push(pascalTyp)
+            graph.addEdge(pascalTyp, key);
+          }
+        } else {
+          // this is converted to {} by read_schema for go...
+          schema = "*";
+
+          //          console.log(f.polymorphic, "polymorphic")
+        }
+
+        if (schema) {
+          let deps2 = deps.get(key) || [];
+          deps2.push({
+            schema,
+            col,
+            inverseCol: "id",
+          });
+          deps.set(key, deps2);
+          //          console.log(key, deps2)
+        }
+      }
+
+      // add derived fields
+      // we don't go super nested because doesn't happen yet
+      if (f.derivedFields) {
+        for (const f2 of f.derivedFields) {
+          const col2 = getDbCol(f2);
+          cols.push(col2);
+        }
+      }
     }
+
     infos.set(key, {
       name: key,
       schema: obj,
@@ -213,6 +286,9 @@ async function readDataAndWriteFiles(
   }
 
   const order = graph.topologicalSort(graph.nodes());
+  // console.log(order)
+  // console.log(deps)
+
 
   // need rows to be global based on order here...
   let promises: Promise<any>[] = [];
@@ -254,18 +330,39 @@ async function readDataAndWriteFiles(
         start = Math.ceil(start / 2);
         i++;
         let partialRow = {};
+        let derivedIDType: string | undefined;
+        //        console.debug("deps", deps2)
         for (const deps3 of deps2) {
-          const row = await getRowFor(infos, globalRows, deps3.schema, i)
+          const depSchema = deps3.schema;
+          let schema: string;
+
+          // polymorphic types.
+          if (Array.isArray(depSchema)) {
+            const idx = Math.floor(Math.random() * depSchema.length);
+            schema = depSchema[idx];
+            derivedIDType = schema;
+          } else if (depSchema === "*") {
+            // wildcard polymorphic
+
+            schema = findStarSchema(infos);
+            derivedIDType = schema;
+
+          } else {
+            // common case.
+            schema = depSchema;
+          }
+
+          const row = await getRowFor(infos, globalRows, schema, i, derivedIDType);
+          //          console.log(row, schema)
           const val = row[deps3.inverseCol];
           if (val === undefined) {
-            console.log(row)
             throw new Error(`got undefined for col ${deps3.inverseCol} in row at index ${i} in table ${info.tableName}`);
           }
           partialRow[deps3.col] = val;
         }
 
         for (let j = 0; j < start; j++) {
-          const row = await getRow(fields, partialRow);
+          const row = await getRow(fields, partialRow, derivedIDType);
           rows.push(row);
         }
       } while (start > 1);
@@ -307,6 +404,27 @@ async function readDataAndWriteFiles(
   return [infos, graph, globalRows];
 }
 
+function findStarSchema(infos: Map<string, Info>) {
+  while (true) {
+    const keys = Array.from(infos.keys());
+    const idx = Math.floor(Math.random() * keys.length);
+    let schema = keys[idx]
+    const info = infos.get(schema);
+    if (!info) {
+      throw new Error(`couldn't find info for schema ${schema}`)
+    }
+    // found schema...
+    if (info.cols.find((v) => v == "id") !== undefined) {
+      // TODO...
+      if (schema === "Request") {
+        continue;
+      }
+      //                console.log('found schema', schema)
+      return schema;
+    }
+  }
+}
+
 function generateQuery(info: Info): string {
   return `COPY ${info.tableName}(${info.cols.join(",")}) FROM '${info.path}' CSV HEADER;`;
 }
@@ -316,6 +434,7 @@ async function getRowFor(
   globalRows: Map<string, Data[]>,
   schema: string,
   i: number,
+  derivedIDType?: string,
 ) {
   const info = infos.get(schema);
   if (!info) {
@@ -328,7 +447,7 @@ async function getRowFor(
   }
   // dependency...
   // create a new one...
-  const newRow = await getRow(info.schema.fields);
+  const newRow = await getRow(info.schema.fields, undefined, derivedIDType);
   rows.push(newRow);
   globalRows.set(info.tableName, rows)
   return newRow;
