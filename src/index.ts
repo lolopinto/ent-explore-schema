@@ -141,6 +141,47 @@ async function getRow(fields: Field[], partial?: {}, derivedIDType?: string): Pr
   return ret;
 }
 
+async function getPartialRow(
+  deps: dependency[],
+  info: Info,
+  infos: Map<string, Info>,
+  globalRows: Map<string, Data[]>,
+  i: number,
+) {
+  let partialRow = {};
+  let derivedIDType: string | undefined;
+
+  for (const deps3 of deps) {
+    const depSchema = deps3.schema;
+    let schema: string;
+
+    // polymorphic types.
+    if (Array.isArray(depSchema)) {
+      const idx = Math.floor(Math.random() * depSchema.length);
+      schema = depSchema[idx];
+      derivedIDType = schema;
+    } else if (depSchema === "*") {
+      // wildcard polymorphic
+
+      schema = findStarSchema(infos);
+      derivedIDType = schema;
+
+    } else {
+      // common case.
+      schema = depSchema;
+    }
+
+    const row = await getRowFor(infos, globalRows, schema, i, derivedIDType);
+    //          console.log(row, schema)
+    const val = row[deps3.inverseCol];
+    if (val === undefined) {
+      throw new Error(`got undefined for col ${deps3.inverseCol} in row at index ${i} in table ${info.tableName}`);
+    }
+    partialRow[deps3.col] = val;
+  }
+  return { partialRow, derivedIDType };
+}
+
 function ensureDir() {
   const dir = path.join(process.cwd(), `/data/inserts`);
   if (!fs.existsSync(dir)) {
@@ -166,6 +207,7 @@ interface Info {
 interface dependency {
   schema: string | string[]; // * wildcard, randomly pick one...
   col: string;
+  unique?: boolean;
   inverseCol: string;
 }
 
@@ -224,6 +266,7 @@ async function readDataAndWriteFiles(
             schema: f.foreignKey.schema,
             col,
             inverseCol: getDbColFromName(f.foreignKey.column),
+            unique: f.unique,
           });
           deps.set(key, deps2)
         }
@@ -259,6 +302,7 @@ async function readDataAndWriteFiles(
             schema,
             col,
             inverseCol: "id",
+            unique: f.unique,
           });
           deps.set(key, deps2);
           //          console.log(key, deps2)
@@ -324,48 +368,31 @@ async function readDataAndWriteFiles(
       }
     } else {
       // dependencies
-      let start = rowCount;
-      let i = -1;
-      do {
-        start = Math.ceil(start / 2);
-        i++;
-        let partialRow = {};
-        let derivedIDType: string | undefined;
-        //        console.debug("deps", deps2)
-        for (const deps3 of deps2) {
-          const depSchema = deps3.schema;
-          let schema: string;
 
-          // polymorphic types.
-          if (Array.isArray(depSchema)) {
-            const idx = Math.floor(Math.random() * depSchema.length);
-            schema = depSchema[idx];
-            derivedIDType = schema;
-          } else if (depSchema === "*") {
-            // wildcard polymorphic
-
-            schema = findStarSchema(infos);
-            derivedIDType = schema;
-
-          } else {
-            // common case.
-            schema = depSchema;
-          }
-
-          const row = await getRowFor(infos, globalRows, schema, i, derivedIDType);
-          //          console.log(row, schema)
-          const val = row[deps3.inverseCol];
-          if (val === undefined) {
-            throw new Error(`got undefined for col ${deps3.inverseCol} in row at index ${i} in table ${info.tableName}`);
-          }
-          partialRow[deps3.col] = val;
-        }
-
-        for (let j = 0; j < start; j++) {
+      const unique = deps2.some(dep => dep.unique);
+      // has a unique field so just create a new one every time
+      if (unique) {
+        for (let i = 0; i < rowCount; i++) {
+          const { partialRow, derivedIDType } = await getPartialRow(deps2, info, infos, globalRows, i);
           const row = await getRow(fields, partialRow, derivedIDType);
           rows.push(row);
         }
-      } while (start > 1);
+      } else {
+
+        let start = rowCount;
+        let i = -1;
+        do {
+          start = Math.ceil(start / 2);
+          i++;
+
+          const { partialRow, derivedIDType } = await getPartialRow(deps2, info, infos, globalRows, i);
+
+          for (let j = 0; j < start; j++) {
+            const row = await getRow(fields, partialRow, derivedIDType);
+            rows.push(row);
+          }
+        } while (start > 1);
+      }
     }
 
     globalRows.set(info.tableName, rows);

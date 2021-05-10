@@ -82,14 +82,27 @@ function getBaseUserTable() {
   );
 }
 
-function getContactsTable() {
+interface SchemaItem {
+  name: string;
+}
+
+function uniqueIndex(col) {
+  return {
+    name: "",//ignore...
+    generate() {
+      return `UNIQUE (${col})`;
+    },
+  };
+}
+function getContactsTable(...constraints: SchemaItem[]) {
   return table("contacts",
     uuid("id", { primaryKey: true }),
     timestamp("created_at"),
     timestamp("updated_at"),
     text("first_name"),
     text("last_name"),
-    uuid("user_id", { foreignKey: { table: "users", col: "id" } })
+    uuid("user_id", { foreignKey: { table: "users", col: "id" } }),
+    ...constraints,
   );
 }
 
@@ -103,7 +116,14 @@ function getForeignKeyTables() {
   return [getBaseUserTable(), getContactsTable()];
 }
 
-function getAddressesTable() {
+function getUniqueTables() {
+  // this sadly has to be created separately from the fixtures (for now...)
+
+  return [getBaseUserTable(), getContactsTable(uniqueIndex('user_id'))];
+}
+
+
+function getAddressesTable(...constraints: SchemaItem[]) {
   return table("addresses",
     uuid("id", { primaryKey: true }),
     timestamp("created_at"),
@@ -115,6 +135,7 @@ function getAddressesTable() {
     text("apartment", { nullable: true }),
     uuid("owner_id"),
     text("owner_type"),
+    ...constraints,
   );
 }
 
@@ -136,6 +157,25 @@ test("foreign key schema", async () => {
   await doTest({
     tables: getForeignKeyTables(),
     path: "fixtures/foreign_key",
+    rowCount: 10,
+    doTest: async (pool: Client) => {
+      const r = await pool.query("SELECT count(1) from users")
+      expect(r.rowCount).toBe(1)
+      const row = r.rows[0];
+      expect(row.count).toBe("10")
+
+      const r2 = await pool.query("SELECT count(1) from contacts")
+      expect(r2.rowCount).toBe(1)
+      const row2 = r2.rows[0];
+      expect(parseInt(row2.count, 10)).toBeGreaterThanOrEqual(10);
+    }
+  })
+})
+
+test("unique", async () => {
+  await doTest({
+    tables: getUniqueTables(),
+    path: "fixtures/unique_field",
     rowCount: 10,
     doTest: async (pool: Client) => {
       const r = await pool.query("SELECT count(1) from users")
@@ -277,4 +317,20 @@ describe("polymorphic", () => {
       }
     })
   })
+
+  test("polymorphic. types. unique", async () => {
+    await doTest({
+      tables: [getBaseUserTable(), getAddressesTable(uniqueIndex("owner_id")), getContactsTable()],
+      path: "fixtures/polymorphic_types_unique",
+      rowCount: 10,
+      doTest: async (pool: Client) => {
+        const r = await pool.query("SELECT * from addresses");
+        expect(r.rowCount).toBeGreaterThanOrEqual(10);
+        for (const r2 of r.rows) {
+          expect(r2.owner_type).toMatch(/User|Contact/);
+        }
+      }
+    })
+  })
+
 })
