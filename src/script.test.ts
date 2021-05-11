@@ -1,7 +1,8 @@
-import { Table, table, TempDB, text, timestamp, uuid } from "@lolopinto/ent/testutils/db/test_db"
+import { Table, table, TempDB, text, timestamp, uuid, assoc_edge_config_table, assoc_edge_table } from "@lolopinto/ent/testutils/db/test_db"
 import { execSync } from "child_process"
 import * as path from "path"
 import { Client } from "pg"
+import { v4 } from "uuid";
 
 let tdb: TempDB;
 
@@ -23,6 +24,7 @@ interface Test {
   doTest: (pool: Client) => Promise<void>;
   rowCount?: number;
   restrict?: string;
+  edgeType?: string;
 }
 
 async function doTest(t: Test) {
@@ -56,10 +58,13 @@ async function doTest(t: Test) {
       parts.push('--rowCount', t.rowCount);
     }
     if (t.restrict) {
-      parts.push('--restrict', t.restrict)
+      parts.push('--restrict', t.restrict);
+    }
+    if (t.edgeType) {
+      parts.push('--edgeType', t.edgeType);
     }
     const r = execSync(parts.join(" "));
-    //    console.log(r)
+    //    console.log(r.toString())
 
     await t.doTest(client);
   } catch (err) {
@@ -332,5 +337,142 @@ describe("polymorphic", () => {
       }
     })
   })
+})
 
+describe('edges', () => {
+  const friendsEdge = v4();
+  const followersEdge = v4();
+  const followeesEdge = v4();
+  const createEdges = async (client: Client) => {
+    const date = new Date();
+    const edges = [
+      {
+        edge_type: friendsEdge,
+        edge_name: "UserToFriendsEdge",
+        edge_table: "user_friends_edges",
+        symmetric_edge: true,
+        inverse_edge_type: null,
+        created_at: date,
+        updated_at: date,
+      },
+      {
+        edge_type: followersEdge,
+        edge_name: "UserToFollowersEdge",
+        edge_table: "user_followers_edges",
+        symmetric_edge: false,
+        inverse_edge_type: followeesEdge,
+        created_at: date,
+        updated_at: date,
+      },
+      {
+        edge_type: followeesEdge,
+        edge_name: "UserToFolloweesEdge",
+        edge_table: "user_followers_edges",
+        symmetric_edge: false,
+        inverse_edge_type: followersEdge,
+        created_at: date,
+        updated_at: date,
+      },
+    ];
+
+    let query = `INSERT INTO assoc_edge_config(edge_type, edge_name, edge_table, symmetric_edge, inverse_edge_type, created_at, updated_at) VALUES`;
+    let valuesList: string[] = [];
+    let idx = 1;
+    let values: any[] = [];
+    for (const edge of edges) {
+      let pos: string[] = [];
+      for (const key in edge) {
+        pos.push(`$${idx}`);
+        idx++;
+        values.push(edge[key]);
+      }
+      valuesList.push(`(${pos.join(",")})`)
+    }
+    query += valuesList.join(",");
+
+    //    console.log(query, values)
+
+    await client.query(query, values)
+  }
+
+  test("symmetric edge", async () => {
+    await doTest({
+      tables: [
+        getBaseUserTable(),
+        assoc_edge_config_table(),
+        assoc_edge_table("user_friends_edges"),
+      ],
+      path: "fixtures/edges",
+      edgeType: "UserToFriendsEdge",
+      rowCount: 10,
+      preTest: async (pool: Client) => {
+        await createEdges(pool);
+      },
+      doTest: async (pool: Client) => {
+        const r = await pool.query("SELECT * from user_friends_edges");
+        // symmetric so by 2...
+        expect(r.rowCount).toBeGreaterThanOrEqual(10 * 2);
+        const id1s: string[] = [];
+        const id2s: string[] = [];
+        for (const r2 of r.rows) {
+          expect(r2.id1_type).toBe("User")
+          expect(r2.id2_type).toBe("User")
+          expect(r2.edge_type).toBe(friendsEdge);
+          id1s.push(r2.id1);
+          id2s.push(r2.id2);
+        }
+        id1s.sort();
+        id2s.sort();
+        expect(id1s).toStrictEqual(id2s);
+      }
+    })
+  })
+
+  test("inverse edge", async () => {
+    await doTest({
+      tables: [
+        getBaseUserTable(),
+        assoc_edge_config_table(),
+        assoc_edge_table("user_followers_edges"),
+      ],
+      path: "fixtures/edges",
+      edgeType: "UserToFollowersEdge",
+      rowCount: 10,
+      preTest: async (pool: Client) => {
+        await createEdges(pool);
+      },
+      doTest: async (pool: Client) => {
+        const r = await pool.query("SELECT * from user_followers_edges");
+        // inverse edge so multiply by 2...
+        expect(r.rowCount).toBeGreaterThanOrEqual(20);
+
+        const id1Followers: string[] = [];
+        const id2Followers: string[] = [];
+        const id1Followees: string[] = [];
+        const id2Followees: string[] = [];
+
+        for (const r2 of r.rows) {
+          expect(r2.id1_type).toBe("User")
+          expect(r2.id2_type).toBe("User")
+          //          if (r2.edge_t)
+          if (r2.edge_type === followersEdge) {
+            id1Followers.push(r2.id1);
+            id2Followers.push(r2.id2);
+
+          } else if (r2.edge_type === followeesEdge) {
+            id1Followees.push(r2.id1);
+            id2Followees.push(r2.id2);
+          } else {
+            fail(`unexpected edge type ${r2.edge_type}`)
+          }
+        }
+        id1Followers.sort();
+        id2Followers.sort();
+        id1Followees.sort();
+        id2Followees.sort();
+        expect(id1Followees).toStrictEqual(id2Followers);
+        expect(id2Followees).toStrictEqual(id1Followers);
+      }
+    })
+  })
 })

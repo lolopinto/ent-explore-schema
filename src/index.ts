@@ -1,7 +1,7 @@
 import minimist from "minimist";
 import { execSync } from "child_process"
 import { getValue } from "./value"
-import { DBType, Field, Schema } from "@lolopinto/ent/schema";
+import { DBType, Edge, Field, Schema, AssocEdge, AssocEdgeGroup, InverseAssocEdge } from "@lolopinto/ent/schema";
 import { snakeCase } from "snake-case";
 import { pascalCase } from "pascal-case"
 import { Data } from "@lolopinto/ent";
@@ -45,6 +45,8 @@ async function main() {
     throw new Error("connection string required")
   }
 
+  const rowCount = options.rowCount ? parseInt(options.rowCount, 10) : RowCount;
+
   if (options.restrict) {
     restrict = new Map();
     let strs: string[] = options.restrict.split(",");
@@ -54,41 +56,34 @@ async function main() {
   }
 
   const dir = ensureDir();
-  const [infos, graph, globalRows] = await readDataAndWriteFiles(
-    options.path,
-    dir,
-    options.rowCount ? parseInt(options.rowCount, 10) : RowCount,
-  );
+  const parsedSchema = parseSchema(options.path, dir);
 
   const client = new pg.Client(options.connString);
-  await client.connect();
-
-  const order = graph.topologicalSort(graph.nodes());
-
 
   try {
-    await client.query('BEGIN')
-    for (const o of order) {
-      const info = infos.get(o);
+    await client.connect();
 
-      if (!info) {
-        throw new Error(`couldn't get info for schema: ${o}`);
-      }
-      const rows = globalRows.get(info.tableName) || [];
-      if (!rows.length) {
-        continue;
-      }
+    let globalRows: Map<string, Data[]>;
+    let edgeQueryInfo: QueryInfo | undefined;
+    if (options.edgeType) {
 
-      console.log(generateQuery(info))
-      await client.query(generateQuery(info))
+      const ret = await generateEdges(parsedSchema, options.edgeType, client, rowCount);
+      globalRows = ret.globalRows;
+      edgeQueryInfo = ret.queryInfo;
+    } else {
+      globalRows = await generateRows(parsedSchema, rowCount);
     }
-    await client.query('COMMIT')
+
+    await writeFiles(parsedSchema, globalRows, edgeQueryInfo)
+
+    await writeQueries(parsedSchema, globalRows, client, edgeQueryInfo);
+
   } catch (err) {
-    await client.query("ROLLBACK");
-    console.error('err: ', err)
+    console.error("err: ", err);
   } finally {
     await client.end();
   }
+
   // TODO flag to disable this
   cleanup();
 }
@@ -212,12 +207,28 @@ interface dependency {
   inverseCol: string;
 }
 
+interface EdgeInfo {
+  id1Type: string;
+  id2Type: string;
+  symmetric: boolean;
+  edgeName: string;
+  inverseEdge?: string;
+}
 
-async function readDataAndWriteFiles(
-  schemaPath: string,
-  dir: string,
-  rowCount: number,
-): Promise<[Map<string, Info>, any, Map<string, Data[]>]> {
+interface ProcessedSchema extends Schema {
+  assocEdges: AssocEdge[];
+  assocEdgeGroups: AssocEdgeGroup[];
+}
+
+interface ParsedSchema {
+  infos: Map<string, Info>;
+  allEdges: Map<string, EdgeInfo>;
+  graph: any; // result of Graph()
+  deps: Map<string, dependency[]>;
+  rootDir: string;
+}
+
+function parseSchema(schemaPath: string, dir: string): ParsedSchema {
   const parts: any[] = ['ts-node'];
   let tsconfigPath = findTsConfigJSONFile(schemaPath);
   if (tsconfigPath !== undefined) {
@@ -232,6 +243,7 @@ async function readDataAndWriteFiles(
 
   let graph = Graph();
   let deps: Map<string, dependency[]> = new Map();
+  const allEdges: Map<string, EdgeInfo> = new Map();
 
   // parse and gather data step
   for (const key in nodes) {
@@ -243,7 +255,7 @@ async function readDataAndWriteFiles(
 
     const tableName = pluralize(snakeCase(key))
     const filePath = path.join(dir, `${tableName}.csv`)
-    const obj = nodes[key] as Schema;
+    const obj = nodes[key] as ProcessedSchema;
     const fields = obj.fields as Field[];
     const cols: string[] = [];
 
@@ -254,8 +266,8 @@ async function readDataAndWriteFiles(
     if (obj.dbRows) {
       generate = false;
     }
-    for (const f of fields) {
 
+    for (const f of fields) {
       const col = getDbCol(f);
       cols.push(col)
       if (f.foreignKey != null) {
@@ -320,6 +332,44 @@ async function readDataAndWriteFiles(
       }
     }
 
+    function processEdges(key: string, edges: AssocEdge[]) {
+      for (const edge of edges) {
+        //        console.log(key, edge.schemaName, edge.name);
+
+        const name = getEdgeName(key, edge)
+        let inverseEdge: string | undefined;
+        if (edge.inverseEdge) {
+          inverseEdge = getInverseEdgeName(edge, edge.inverseEdge)
+          allEdges.set(inverseEdge, {
+            edgeName: inverseEdge,
+            symmetric: false,
+            id1Type: edge.schemaName,
+            id2Type: key,
+            inverseEdge: name,
+          })
+        }
+        allEdges.set(name, {
+          edgeName: name,
+          symmetric: edge.symmetric || false,
+          id1Type: key,
+          id2Type: edge.schemaName,
+          inverseEdge: inverseEdge,
+        })
+      }
+    }
+    if (obj.assocEdges) {
+      processEdges
+      for (const edge of obj.assocEdges) {
+        processEdges(key, obj.assocEdges)
+      }
+    }
+
+    if (obj.assocEdgeGroups) {
+      for (const group of obj.assocEdgeGroups) {
+        processEdges(key, group.assocEdges)
+      }
+    }
+
     infos.set(key, {
       name: key,
       schema: obj,
@@ -330,13 +380,14 @@ async function readDataAndWriteFiles(
     })
   }
 
+  return { graph, allEdges, infos, deps, rootDir: dir }
+}
+
+async function generateRows(parsedSchema: ParsedSchema, rowCount: number): Promise<Map<string, Data[]>> {
+  const { graph, infos, deps } = parsedSchema;
   const order = graph.topologicalSort(graph.nodes());
   // console.log(order)
   // console.log(deps)
-
-
-  // need rows to be global based on order here...
-  let promises: Promise<any>[] = [];
 
   let globalRows: Map<string, Data[]> = new Map();
 
@@ -399,6 +450,127 @@ async function readDataAndWriteFiles(
     globalRows.set(info.tableName, rows);
   }
 
+  return globalRows;
+}
+
+async function generateEdges(
+  parsedSchema: ParsedSchema,
+  edgeType: string,
+  client: pg.Client,
+  rowCount: number,
+) {
+  const { allEdges, infos } = parsedSchema;
+  const edgeInfo = allEdges.get(edgeType);
+  if (!edgeInfo) {
+    throw new Error(`couldn't load edge info for ${edgeType}`);
+  }
+
+  const globalRows = new Map<string, Data[]>();
+
+  const r = await client.query('SELECT * FROM assoc_edge_config where edge_name = $1', [edgeInfo.edgeName]);
+  if (r.rowCount !== 1) {
+    throw new Error(`couldn't load data for edge ${edgeInfo.edgeName}`)
+  }
+  const row = r.rows[0];
+  if (row.symmetric_edge != edgeInfo.symmetric) {
+    throw new Error(`row and edgeInfo don't match. row: ${inspect(row, undefined, 2)} edgeInfo: ${inspect(edgeInfo, undefined, 2)}`);
+  }
+  if (row.inverse_edge_type && !edgeInfo.inverseEdge) {
+    throw new Error(`row and edgeInfo don't match. row: ${inspect(row, undefined, 2)} edgeInfo: ${inspect(edgeInfo, undefined, 2)}`)
+  }
+
+  let start = rowCount;
+
+  const id1Type = edgeInfo.id1Type;
+  const id2Type = edgeInfo.id2Type;
+
+  const rows: Data[] = [];
+  const date = new Date().toISOString();
+  do {
+    start = Math.ceil(start / 2);
+
+    const obj1 = await getRowFor(infos, globalRows, id1Type, undefined, id1Type);
+
+    for (let j = 0; j < start; j++) {
+      const obj2 = await getRowFor(infos, globalRows, id2Type, undefined, id2Type)
+      //          console.log(obj1, obj2)
+      rows.push({
+        id1: obj1.id,
+        id1_type: id1Type,
+        edge_type: row.edge_type,
+        i2: obj2.id,
+        id2_type: id2Type,
+        time: date,
+        data: null,
+      })
+      if (edgeInfo.symmetric) {
+        rows.push({
+          id1: obj2.id,
+          id1_type: id2Type,
+          edge_type: row.edge_type,
+          i2: obj1.id,
+          id2_type: id1Type,
+          time: date,
+          data: null,
+        })
+      }
+      if (edgeInfo.inverseEdge) {
+        rows.push({
+          id1: obj2.id,
+          id1_type: id2Type,
+          edge_type: row.inverse_edge_type,
+          i2: obj1.id,
+          id2_type: id1Type,
+          time: date,
+          data: null,
+        })
+      }
+    }
+
+  } while (start > 1);
+  // put in correct file and then add to globalRows...
+  globalRows.set(row.edge_table, rows);
+
+  //  console.log(globalRows)
+  return {
+    globalRows, queryInfo: {
+      tableName: row.edge_table,
+      path: path.join(parsedSchema.rootDir, `${row.edge_table}.csv`),
+      cols: ["id1", "id1_type", "edge_type", "id2", "id2_type", "time", "data"],
+    }
+  };
+}
+
+async function writeFiles(
+  parsedSchema: ParsedSchema,
+  globalRows: Map<string, Data[]>,
+  edgeQueryInfo?: QueryInfo,
+) {
+
+  const newPromise = (filePath: string, rows: Data[]) => {
+    const writeStream = fs.createWriteStream(filePath);
+
+    return new Promise((resolve, reject) => {
+      writeToStream(writeStream, rows, {
+        headers: true,
+        includeEndRowDelimiter: true,
+      })
+        .on("error", (err) => {
+          console.error(err);
+          reject(err);
+        })
+        .on("finish", () => {
+          console.log("done writing to ", filePath);
+          resolve(true);
+        });
+
+    })
+  }
+
+  const { infos } = parsedSchema;
+
+  let promises: Promise<any>[] = [];
+
   // write data to csv step
   for (const [key, info] of infos) {
     const rows = globalRows.get(info.tableName) || [];
@@ -408,28 +580,57 @@ async function readDataAndWriteFiles(
       continue;
     }
 
-    const writeStream = fs.createWriteStream(info.path);
-
-    promises.push(
-      new Promise((resolve, reject) => {
-        writeToStream(writeStream, rows, {
-          headers: true,
-          includeEndRowDelimiter: true,
-        })
-          .on("error", (err) => {
-            console.error(err);
-            reject(err);
-          })
-          .on("finish", () => {
-            console.log("done writing to ", info.path);
-            resolve(true);
-          });
-
-      })
-    )
+    promises.push(newPromise(info.path, rows));
   }
+
+  if (edgeQueryInfo) {
+    const rows = globalRows.get(edgeQueryInfo.tableName);
+    if (rows) {
+
+      promises.push(newPromise(edgeQueryInfo.path, rows));
+    }
+  }
+
   await Promise.all(promises)
-  return [infos, graph, globalRows];
+}
+
+async function writeQueries(
+  parsedSchema: ParsedSchema,
+  globalRows: Map<string, Data[]>,
+  client: pg.Client,
+  edgeQueryInfo?: QueryInfo) {
+  const { infos, graph } = parsedSchema;
+  const order = graph.topologicalSort(graph.nodes());
+
+  try {
+    await client.query('BEGIN')
+    for (const o of order) {
+      const info = infos.get(o);
+
+      if (!info) {
+        throw new Error(`couldn't get info for schema: ${o}`);
+      }
+      const rows = globalRows.get(info.tableName) || [];
+      if (!rows.length) {
+        continue;
+      }
+
+      console.log(generateQuery(info))
+      await client.query(generateQuery(info))
+    }
+
+    if (edgeQueryInfo) {
+      console.log(edgeQueryInfo)
+      const edgeQuery = generateQuery(edgeQueryInfo)
+      console.log(edgeQuery);
+      await client.query(edgeQuery);
+    }
+    await client.query('COMMIT')
+
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error('err: ', err)
+  }
 }
 
 function findStarSchema(infos: Map<string, Info>) {
@@ -449,15 +650,22 @@ function findStarSchema(infos: Map<string, Info>) {
   }
 }
 
-function generateQuery(info: Info): string {
+interface QueryInfo {
+  tableName: string;
+  cols: string[];
+  path: string;
+}
+
+function generateQuery(info: QueryInfo): string {
   return `COPY ${info.tableName}(${info.cols.join(",")}) FROM '${info.path}' CSV HEADER;`;
 }
+
 
 async function getRowFor(
   infos: Map<string, Info>,
   globalRows: Map<string, Data[]>,
   schema: string,
-  i: number,
+  i?: number,
   derivedIDType?: string,
 ) {
   const info = infos.get(schema);
@@ -465,9 +673,11 @@ async function getRowFor(
     throw new Error(`couldn't get info for schema: ${schema}`);
   }
   const rows = globalRows.get(info.tableName) || [];
-  const row = rows[i];
-  if (row) {
-    return row;
+  if (i !== undefined) {
+    const row = rows[i];
+    if (row) {
+      return row;
+    }
   }
   // dependency...
   // create a new one...
@@ -475,6 +685,25 @@ async function getRowFor(
   rows.push(newRow);
   globalRows.set(info.tableName, rows)
   return newRow;
+}
+
+function getEdgeName(sourceNode: string, assocEdge: AssocEdge): string {
+  const prefix = pascalCase(sourceNode) + "To";
+  const suffix = pascalCase(assocEdge.name) + "Edge";
+  if (pascalCase(assocEdge.name).indexOf(prefix) === 0) {
+    return suffix;
+  }
+  return prefix + suffix;
+}
+
+function getInverseEdgeName(assocEdge: AssocEdge, inverseEdge: InverseAssocEdge): string {
+  const prefix = pascalCase(assocEdge.schemaName) + "To";
+  const suffix = pascalCase(inverseEdge.name) + "Edge";
+  // already starts with UserTo or something along those lines
+  if (pascalCase(inverseEdge.name).indexOf(prefix) === 0) {
+    return suffix;
+  }
+  return prefix + suffix;
 }
 
 Promise.resolve(main());
