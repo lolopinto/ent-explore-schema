@@ -15,7 +15,6 @@ import { inspect } from "util"
 
 const scriptPath = "./node_modules/@lolopinto/ent/scripts/read_schema";
 
-//const RowCount = 100000;
 // default is 10000 if doing all the objects...
 // recommended to pass rowCount and restrict if we want a large number e.g. 100,000+
 const RowCount = 10000;
