@@ -61,10 +61,8 @@ describe("strings", () => {
   })
 
   test("password", async () => {
-    const val = await testString("password", { name: "password" })
-    // default cost
-    // only thing isUpper(we can relly test).toBeTruthy()
-    expect(bcryptjs.getRounds(val)).toBe(10);
+    // password is just a string because of speed issues since we may be generating a lot of rows
+    await testString("password", { name: "password" })
   })
 
   test("first name", async () => {

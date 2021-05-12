@@ -4,7 +4,6 @@ import { v4 } from "uuid";
 import { DateType, TimeType, TimetzType, TimestampType, TimestamptzType, } from "@lolopinto/ent/schema"
 import { EmailType } from "@lolopinto/ent-email"
 import { PhoneNumberType } from "@lolopinto/ent-phonenumber";
-import { PasswordType } from "@lolopinto/ent-password";
 
 function random(): string {
   return Math.random()
@@ -36,7 +35,7 @@ function coinFlip() {
   return Math.floor(Math.random() * 10) >= 5;
 }
 
-async function specialType(typ: Type, col: string) {
+function specialType(typ: Type, col: string) {
   let list = m.get(typ.dbType);
   if (list?.length) {
     for (const l of list) {
@@ -49,7 +48,7 @@ async function specialType(typ: Type, col: string) {
 
       for (const r of regex) {
         if (r.test(col)) {
-          return await l.newValue();
+          return l.newValue();
         }
       }
     }
@@ -61,13 +60,13 @@ interface Info {
   schema: Schema;
 }
 
-export async function getValue(f: Field, col: string, infos?: Map<string, Info>): Promise<any> {
+export function getValue(f: Field, col: string, infos?: Map<string, Info>): any {
   // half the time, return null for nullable
   if (f.nullable && coinFlip()) {
     return null;
   }
 
-  const specialVal = await specialType(f.type, col);
+  const specialVal = specialType(f.type, col);
   if (specialVal !== undefined) {
     return specialVal
   }
@@ -152,7 +151,8 @@ const phoneType = {
 const passwordType = {
   dbType: DBType.String,
   newValue: () => {
-    return PasswordType({ name: "foo" }).format(random());
+    // we don't use password type because when we're generating so many rows, it's too slow...
+    return random();
   },
   regex: /^password/,
 };

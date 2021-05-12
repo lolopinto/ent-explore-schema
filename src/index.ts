@@ -85,7 +85,7 @@ async function main() {
   }
 
   // TODO flag to disable this
-  cleanup();
+  //  cleanup();
 }
 
 
@@ -97,7 +97,7 @@ function getDbCol(field: Field): string {
   return field.storageKey || getDbColFromName(field.name);
 }
 
-async function getRow(fields: Field[], infos: Map<string, Info>, partial?: {}, derivedIDType?: string): Promise<Data> {
+function getRow(fields: Field[], infos: Map<string, Info>, partial?: {}, derivedIDType?: string): Data {
   partial = partial || {};
   const ret = {};
   for (const field of fields) {
@@ -105,7 +105,7 @@ async function getRow(fields: Field[], infos: Map<string, Info>, partial?: {}, d
     if (partial[col] !== undefined) {
       ret[col] = partial[col];
     } else {
-      ret[col] = await getValue(field, col, infos);
+      ret[col] = getValue(field, col, infos);
     }
 
     if (field.derivedFields) {
@@ -137,7 +137,7 @@ async function getRow(fields: Field[], infos: Map<string, Info>, partial?: {}, d
   return ret;
 }
 
-async function getPartialRow(
+function getPartialRow(
   deps: dependency[],
   info: Info,
   infos: Map<string, Info>,
@@ -167,8 +167,7 @@ async function getPartialRow(
       schema = depSchema;
     }
 
-    const row = await getRowFor(infos, globalRows, schema, i, derivedIDType);
-    //          console.log(row, schema)
+    const row = getRowFor(infos, globalRows, schema, i, derivedIDType);
     const val = row[deps3.inverseCol];
     if (val === undefined) {
       throw new Error(`got undefined for col ${deps3.inverseCol} in row at index ${i} in table ${info.tableName}`);
@@ -285,7 +284,6 @@ function parseSchema(schemaPath: string, dir: string): ParsedSchema {
         }
       }
 
-      //      console.log(f.name, key)
       if (f.polymorphic) {
         //        console.log('polymorphic', typeof f.polymorphic)
         // just polymorphic so any field goes here...
@@ -415,7 +413,7 @@ async function generateRows(parsedSchema: ParsedSchema, rowCount: number): Promi
     if (!deps2) {
       // no dep
       for (let i = 0; i < rowCount; i++) {
-        const row = await getRow(fields, infos);
+        const row = getRow(fields, infos);
         rows.push(row);
       }
     } else {
@@ -425,8 +423,8 @@ async function generateRows(parsedSchema: ParsedSchema, rowCount: number): Promi
       // has a unique field so just create a new one every time
       if (unique) {
         for (let i = 0; i < rowCount; i++) {
-          const { partialRow, derivedIDType } = await getPartialRow(deps2, info, infos, globalRows, i);
-          const row = await getRow(fields, infos, partialRow, derivedIDType);
+          const { partialRow, derivedIDType } = getPartialRow(deps2, info, infos, globalRows, i);
+          const row = getRow(fields, infos, partialRow, derivedIDType);
           rows.push(row);
         }
       } else {
@@ -437,10 +435,10 @@ async function generateRows(parsedSchema: ParsedSchema, rowCount: number): Promi
           start = Math.ceil(start / 2);
           i++;
 
-          const { partialRow, derivedIDType } = await getPartialRow(deps2, info, infos, globalRows, i);
+          const { partialRow, derivedIDType } = getPartialRow(deps2, info, infos, globalRows, i);
 
           for (let j = 0; j < start; j++) {
-            const row = await getRow(fields, infos, partialRow, derivedIDType);
+            const row = getRow(fields, infos, partialRow, derivedIDType);
             rows.push(row);
           }
         } while (start > 1);
@@ -465,7 +463,6 @@ async function generateEdges(
     throw new Error(`couldn't load edge info for ${edgeType}`);
   }
 
-  const globalRows = new Map<string, Data[]>();
 
   const r = await client.query('SELECT * FROM assoc_edge_config where edge_name = $1', [edgeInfo.edgeName]);
   if (r.rowCount !== 1) {
@@ -480,21 +477,31 @@ async function generateEdges(
   }
 
   let start = rowCount;
+  let i = -1;
 
   const id1Type = edgeInfo.id1Type;
   const id2Type = edgeInfo.id2Type;
 
-  const rows: Data[] = [];
+  const edgeRows: Data[] = [];
+
   const date = new Date().toISOString();
+
+  // separate map is used for id1s (which is smaller) so that we use a 
+  // fixed number of ids for the id2s and then just create the
+  // mapping as needed
+  const globalRowsID1s = new Map<string, Data[]>();
+  const globalRows = new Map<string, Data[]>();
+
   do {
     start = Math.ceil(start / 2);
+    i++;
 
-    const obj1 = await getRowFor(infos, globalRows, id1Type, undefined, id1Type);
+    const obj1 = getRowFor(infos, globalRowsID1s, id1Type, i, id1Type);
 
     for (let j = 0; j < start; j++) {
-      const obj2 = await getRowFor(infos, globalRows, id2Type, undefined, id2Type)
-      //          console.log(obj1, obj2)
-      rows.push({
+      const obj2 = getRowFor(infos, globalRows, id2Type, j, id2Type)
+
+      edgeRows.push({
         id1: obj1.id,
         id1_type: id1Type,
         edge_type: row.edge_type,
@@ -504,7 +511,7 @@ async function generateEdges(
         data: null,
       })
       if (edgeInfo.symmetric) {
-        rows.push({
+        edgeRows.push({
           id1: obj2.id,
           id1_type: id2Type,
           edge_type: row.edge_type,
@@ -515,7 +522,7 @@ async function generateEdges(
         })
       }
       if (edgeInfo.inverseEdge) {
-        rows.push({
+        edgeRows.push({
           id1: obj2.id,
           id1_type: id2Type,
           edge_type: row.inverse_edge_type,
@@ -528,8 +535,15 @@ async function generateEdges(
     }
 
   } while (start > 1);
+
+  // move the objects that were in id1 map into main map
+  for (const [key, dupRows] of globalRowsID1s) {
+    const rows = globalRows.get(key) || [];
+    rows.push(...dupRows);
+    globalRows.set(key, rows);
+  }
   // put in correct file and then add to globalRows...
-  globalRows.set(row.edge_table, rows);
+  globalRows.set(row.edge_table, edgeRows);
 
   //  console.log(globalRows)
   return {
@@ -661,11 +675,11 @@ function generateQuery(info: QueryInfo): string {
 }
 
 
-async function getRowFor(
+function getRowFor(
   infos: Map<string, Info>,
   globalRows: Map<string, Data[]>,
   schema: string,
-  i?: number,
+  i: number,
   derivedIDType?: string,
 ) {
   const info = infos.get(schema);
@@ -673,15 +687,14 @@ async function getRowFor(
     throw new Error(`couldn't get info for schema: ${schema}`);
   }
   const rows = globalRows.get(info.tableName) || [];
-  if (i !== undefined) {
-    const row = rows[i];
-    if (row) {
-      return row;
-    }
+  const row = rows[i];
+  if (row) {
+    return row;
   }
   // dependency...
+
   // create a new one...
-  const newRow = await getRow(info.schema.fields, infos, undefined, derivedIDType);
+  const newRow = getRow(info.schema.fields, infos, undefined, derivedIDType);
   rows.push(newRow);
   globalRows.set(info.tableName, rows)
   return newRow;
