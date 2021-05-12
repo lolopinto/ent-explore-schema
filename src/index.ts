@@ -85,7 +85,7 @@ async function main() {
   }
 
   // TODO flag to disable this
-  //  cleanup();
+  cleanup();
 }
 
 
@@ -402,50 +402,14 @@ async function generateRows(parsedSchema: ParsedSchema, rowCount: number): Promi
       continue;
     }
 
-    const fields = info.schema.fields as Field[];
-
-    let deps2 = deps.get(key);
-    let rows: Data[] = [];
-
-    // for now just assume simple and no dependencies...
-    // we start with user...    
-    // no dependencies, nothing to do here...
-    if (!deps2) {
-      // no dep
-      for (let i = 0; i < rowCount; i++) {
-        const row = getRow(fields, infos);
-        rows.push(row);
-      }
-    } else {
-      // dependencies
-
-      const unique = deps2.some(dep => dep.unique);
-      // has a unique field so just create a new one every time
-      if (unique) {
-        for (let i = 0; i < rowCount; i++) {
-          const { partialRow, derivedIDType } = getPartialRow(deps2, info, infos, globalRows, i);
-          const row = getRow(fields, infos, partialRow, derivedIDType);
-          rows.push(row);
-        }
-      } else {
-
-        let start = rowCount;
-        let i = -1;
-        do {
-          start = Math.ceil(start / 2);
-          i++;
-
-          const { partialRow, derivedIDType } = getPartialRow(deps2, info, infos, globalRows, i);
-
-          for (let j = 0; j < start; j++) {
-            const row = getRow(fields, infos, partialRow, derivedIDType);
-            rows.push(row);
-          }
-        } while (start > 1);
-      }
-    }
-
-    globalRows.set(info.tableName, rows);
+    generateBulkRows(
+      key,
+      deps,
+      rowCount,
+      infos,
+      info,
+      globalRows,
+    )
   }
 
   return globalRows;
@@ -457,7 +421,7 @@ async function generateEdges(
   client: pg.Client,
   rowCount: number,
 ) {
-  const { allEdges, infos } = parsedSchema;
+  const { allEdges, infos, deps } = parsedSchema;
   const edgeInfo = allEdges.get(edgeType);
   if (!edgeInfo) {
     throw new Error(`couldn't load edge info for ${edgeType}`);
@@ -476,8 +440,6 @@ async function generateEdges(
     throw new Error(`row and edgeInfo don't match. row: ${inspect(row, undefined, 2)} edgeInfo: ${inspect(edgeInfo, undefined, 2)}`)
   }
 
-  let start = rowCount;
-  let i = -1;
 
   const id1Type = edgeInfo.id1Type;
   const id2Type = edgeInfo.id2Type;
@@ -489,17 +451,56 @@ async function generateEdges(
   // separate map is used for id1s (which is smaller) so that we use a 
   // fixed number of ids for the id2s and then just create the
   // mapping as needed
+  //  const globalRowsID1s = new Map<string, Data[]>();
+
+  const id1Info = infos.get(id1Type);
+  if (!id1Info) {
+    throw new Error(`couldn't get info for ${id1Type}`);
+  }
+  const id2Info = infos.get(id2Type);
+  if (!id2Info) {
+    throw new Error(`couldn't get info for ${id2Type}`);
+  }
   const globalRowsID1s = new Map<string, Data[]>();
   const globalRows = new Map<string, Data[]>();
+
+  // pregenerate id2s 
+  const obj2s = generateBulkRows(
+    id2Type,
+    deps,
+    Math.ceil(rowCount / 2),
+    infos,
+    id2Info,
+    globalRows,
+  )
+
+  let start = rowCount;
+  let i = -1;
 
   do {
     start = Math.ceil(start / 2);
     i++;
 
-    const obj1 = getRowFor(infos, globalRowsID1s, id1Type, i, id1Type);
+    // generate new "bulk" of 1
+    // could have generated this above but can't quickly get Math.log to work.
+    //  Math.ceil(Math.log2(rowCount)),
+    // so we just generate "bulk" of 1 each time.
+    const obj1s = generateBulkRows(
+      id1Type,
+      deps,
+      1,
+      infos,
+      id1Info,
+      globalRowsID1s,
+    )
+    const obj1 = obj1s[0]
+
 
     for (let j = 0; j < start; j++) {
-      const obj2 = getRowFor(infos, globalRows, id2Type, j, id2Type)
+      const obj2 = obj2s[j];
+      if (!obj2) {
+        throw new Error(`couldn't load obj2 at index ${j}`)
+      }
 
       edgeRows.push({
         id1: obj1.id,
@@ -542,7 +543,8 @@ async function generateEdges(
     rows.push(...dupRows);
     globalRows.set(key, rows);
   }
-  // put in correct file and then add to globalRows...
+
+  // add edges to globalRows
   globalRows.set(row.edge_table, edgeRows);
 
   //  console.log(globalRows)
@@ -553,6 +555,57 @@ async function generateEdges(
       cols: ["id1", "id1_type", "edge_type", "id2", "id2_type", "time", "data"],
     }
   };
+}
+
+function generateBulkRows(
+  key: string,
+  deps: Map<string, dependency[]>,
+  rowCount: number,
+  infos: Map<string, Info>,
+  info: Info,
+  globalRows: Map<string, Data[]>,
+) {
+  const fields = info.schema.fields;
+  let deps2 = deps.get(key);
+  let rows: Data[] = [];
+
+  // no dependencies, simple...
+  if (!deps2) {
+    // no dep
+    for (let i = 0; i < rowCount; i++) {
+      const row = getRow(fields, infos);
+      rows.push(row);
+    }
+  } else {
+    // dependencies
+
+    const unique = deps2.some(dep => dep.unique);
+    // has a unique field so just create a new one every time
+    if (unique) {
+      for (let i = 0; i < rowCount; i++) {
+        const { partialRow, derivedIDType } = getPartialRow(deps2, info, infos, globalRows, i);
+        const row = getRow(fields, infos, partialRow, derivedIDType);
+        rows.push(row);
+      }
+    } else {
+
+      let start = rowCount;
+      let i = -1;
+      do {
+        start = Math.ceil(start / 2);
+        i++;
+
+        const { partialRow, derivedIDType } = getPartialRow(deps2, info, infos, globalRows, i);
+
+        for (let j = 0; j < start; j++) {
+          const row = getRow(fields, infos, partialRow, derivedIDType);
+          rows.push(row);
+        }
+      } while (start > 1);
+    }
+  }
+  globalRows.set(info.tableName, rows)
+  return rows;
 }
 
 async function writeFiles(
@@ -634,7 +687,6 @@ async function writeQueries(
     }
 
     if (edgeQueryInfo) {
-      console.log(edgeQueryInfo)
       const edgeQuery = generateQuery(edgeQueryInfo)
       console.log(edgeQuery);
       await client.query(edgeQuery);

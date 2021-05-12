@@ -87,6 +87,18 @@ function getBaseUserTable() {
   );
 }
 
+function getEventsTable() {
+  return table("events",
+    uuid("id", { primaryKey: true }),
+    timestamp("created_at"),
+    timestamp("updated_at"),
+    text("name"),
+    uuid("creator_id", { foreignKey: { table: "users", col: "id" } }),
+    timestamp("start_time"),
+    timestamp("end_time", { nullable: true }),
+  )
+}
+
 interface SchemaItem {
   name: string;
 }
@@ -343,6 +355,8 @@ describe('edges', () => {
   const friendsEdge = v4();
   const followersEdge = v4();
   const followeesEdge = v4();
+  const eventToHostsEdge = v4();
+  const userToHostedEvents = v4();
   const createEdges = async (client: Client) => {
     const date = new Date();
     const edges = [
@@ -370,6 +384,24 @@ describe('edges', () => {
         edge_table: "user_followers_edges",
         symmetric_edge: false,
         inverse_edge_type: followersEdge,
+        created_at: date,
+        updated_at: date,
+      },
+      {
+        edge_type: eventToHostsEdge,
+        edge_name: "EventToHostsEdge",
+        edge_table: "event_hosts_edge",
+        symmetric_edge: false,
+        inverse_edge_type: userToHostedEvents,
+        created_at: date,
+        updated_at: date,
+      },
+      {
+        edge_type: userToHostedEvents,
+        edge_name: "UserToHostedEventsEdge",
+        edge_table: "event_hosts_edge",
+        symmetric_edge: false,
+        inverse_edge_type: eventToHostsEdge,
         created_at: date,
         updated_at: date,
       },
@@ -405,9 +437,7 @@ describe('edges', () => {
       path: "fixtures/edges",
       edgeType: "UserToFriendsEdge",
       rowCount: 10,
-      preTest: async (pool: Client) => {
-        await createEdges(pool);
-      },
+      preTest: createEdges,
       doTest: async (pool: Client) => {
         const r = await pool.query("SELECT * from user_friends_edges");
         // symmetric so by 2...
@@ -438,9 +468,7 @@ describe('edges', () => {
       path: "fixtures/edges",
       edgeType: "UserToFollowersEdge",
       rowCount: 10,
-      preTest: async (pool: Client) => {
-        await createEdges(pool);
-      },
+      preTest: createEdges,
       doTest: async (pool: Client) => {
         const r = await pool.query("SELECT * from user_followers_edges");
         // inverse edge so multiply by 2...
@@ -472,6 +500,57 @@ describe('edges', () => {
         id2Followees.sort();
         expect(id1Followees).toStrictEqual(id2Followers);
         expect(id2Followees).toStrictEqual(id1Followers);
+      }
+    })
+  })
+
+  test("inverse edge different types + dependency", async () => {
+    await doTest({
+      tables: [
+        getBaseUserTable(),
+        getEventsTable(),
+        assoc_edge_config_table(),
+        assoc_edge_table("event_hosts_edge"),
+      ],
+      path: "fixtures/edges",
+      edgeType: "EventToHostsEdge",
+      rowCount: 10,
+      preTest: createEdges,
+      doTest: async (pool: Client) => {
+        const r = await pool.query("SELECT * from event_hosts_edge");
+        // inverse edge so multiply by 2...
+        expect(r.rowCount).toBeGreaterThanOrEqual(20);
+
+        const id1EventToHosts: string[] = [];
+        const id2EventToHosts: string[] = [];
+        const id1UserToHostedEvents: string[] = [];
+        const id2UserToHostedEvents: string[] = [];
+
+        for (const r2 of r.rows) {
+          //          if (r2.edge_t)
+          if (r2.edge_type === eventToHostsEdge) {
+            id1EventToHosts.push(r2.id1);
+            id2EventToHosts.push(r2.id2);
+            expect(r2.id1_type).toBe("Event")
+            expect(r2.id2_type).toBe("User")
+
+          } else if (r2.edge_type === userToHostedEvents) {
+            id1UserToHostedEvents.push(r2.id1);
+            id2UserToHostedEvents.push(r2.id2);
+            expect(r2.id1_type).toBe("User")
+            expect(r2.id2_type).toBe("Event")
+
+          } else {
+            fail(`unexpected edge type ${r2.edge_type}`)
+          }
+        }
+        id1EventToHosts.sort();
+        id2EventToHosts.sort();
+        id1UserToHostedEvents.sort();
+        id2UserToHostedEvents.sort();
+        expect(id1UserToHostedEvents).toStrictEqual(id2EventToHosts);
+        expect(id2UserToHostedEvents).toStrictEqual(id1EventToHosts);
+
       }
     })
   })
