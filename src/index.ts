@@ -1,7 +1,7 @@
 import minimist from "minimist";
 import { execSync } from "child_process"
 import { getValue } from "./value"
-import { DBType, Edge, Field, Schema, AssocEdge, AssocEdgeGroup, InverseAssocEdge } from "@lolopinto/ent/schema";
+import { DBType, Field, Schema, AssocEdge, AssocEdgeGroup, InverseAssocEdge } from "@lolopinto/ent/schema";
 import { snakeCase } from "snake-case";
 import { pascalCase } from "pascal-case"
 import { Data } from "@lolopinto/ent";
@@ -20,6 +20,7 @@ const scriptPath = "./node_modules/@lolopinto/ent/scripts/read_schema";
 const RowCount = 10000;
 
 let restrict: Map<string, boolean> | undefined;
+let summaries: string[] = [];
 
 function findTsConfigJSONFile(dirPath: string): string | undefined {
   while (dirPath != '/') {
@@ -65,9 +66,9 @@ async function main() {
 
     let globalRows: Map<string, Data[]>;
     let edgeQueryInfo: QueryInfo | undefined;
-    if (options.edgeType) {
+    if (options.edgeName) {
 
-      const ret = await generateEdges(parsedSchema, options.edgeType, client, rowCount);
+      const ret = await generateEdges(parsedSchema, options.edgeName, client, rowCount);
       globalRows = ret.globalRows;
       edgeQueryInfo = ret.queryInfo;
     } else {
@@ -86,6 +87,9 @@ async function main() {
 
   // TODO flag to disable this
   cleanup();
+
+  console.log("SUMMARY:")
+  console.log(summaries.join("\n"))
 }
 
 
@@ -417,14 +421,14 @@ async function generateRows(parsedSchema: ParsedSchema, rowCount: number): Promi
 
 async function generateEdges(
   parsedSchema: ParsedSchema,
-  edgeType: string,
+  edgeName: string,
   client: pg.Client,
   rowCount: number,
 ) {
   const { allEdges, infos, deps } = parsedSchema;
-  const edgeInfo = allEdges.get(edgeType);
+  const edgeInfo = allEdges.get(edgeName);
   if (!edgeInfo) {
-    throw new Error(`couldn't load edge info for ${edgeType}`);
+    throw new Error(`couldn't load edge info for ${edgeName}`);
   }
 
 
@@ -472,6 +476,7 @@ async function generateEdges(
     infos,
     id2Info,
     globalRows,
+    true,
   )
 
   let start = rowCount;
@@ -492,6 +497,7 @@ async function generateEdges(
       infos,
       id1Info,
       globalRowsID1s,
+      true,
     )
     const obj1 = obj1s[0]
 
@@ -535,6 +541,11 @@ async function generateEdges(
       }
     }
 
+    summaries.push(
+      `${start}` +
+      `${edgeInfo.symmetric ? " symmetric" : ""}` +
+      `${edgeInfo.inverseEdge ? " inverse" : ""}` +
+      ` edges created from id1 ${obj1.id} with edge_type: ${row.edge_type}`)
   } while (start > 1);
 
   // move the objects that were in id1 map into main map
@@ -564,6 +575,7 @@ function generateBulkRows(
   infos: Map<string, Info>,
   info: Info,
   globalRows: Map<string, Data[]>,
+  disableSummary?: boolean,
 ) {
   const fields = info.schema.fields;
   let deps2 = deps.get(key);
@@ -576,6 +588,9 @@ function generateBulkRows(
       const row = getRow(fields, infos);
       rows.push(row);
     }
+    if (!disableSummary) {
+      summaries.push(`${rowCount} rows created in table ${info.tableName}`);
+    }
   } else {
     // dependencies
 
@@ -586,6 +601,9 @@ function generateBulkRows(
         const { partialRow, derivedIDType } = getPartialRow(deps2, info, infos, globalRows, i);
         const row = getRow(fields, infos, partialRow, derivedIDType);
         rows.push(row);
+      }
+      if (!disableSummary) {
+        summaries.push(`${rowCount} rows created in table ${info.tableName}`);
       }
     } else {
 
@@ -600,6 +618,13 @@ function generateBulkRows(
         for (let j = 0; j < start; j++) {
           const row = getRow(fields, infos, partialRow, derivedIDType);
           rows.push(row);
+        }
+        if (!disableSummary) {
+          let summary = `${start} rows created in table ${info.tableName} with commonality: ${inspect(partialRow, undefined, 2)}`;
+          if (derivedIDType) {
+            summary += ` of polymorphic type ${derivedIDType}`;
+          }
+          summaries.push(summary);
         }
       } while (start > 1);
     }
@@ -627,7 +652,7 @@ async function writeFiles(
           reject(err);
         })
         .on("finish", () => {
-          console.log("done writing to ", filePath);
+          //          console.log("done writing to ", filePath);
           resolve(true);
         });
 
@@ -682,13 +707,13 @@ async function writeQueries(
         continue;
       }
 
-      console.log(generateQuery(info))
+      //      console.log(generateQuery(info))
       await client.query(generateQuery(info))
     }
 
     if (edgeQueryInfo) {
       const edgeQuery = generateQuery(edgeQueryInfo)
-      console.log(edgeQuery);
+      //      console.log(edgeQuery);
       await client.query(edgeQuery);
     }
     await client.query('COMMIT')

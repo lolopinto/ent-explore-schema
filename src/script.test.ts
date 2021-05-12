@@ -24,7 +24,7 @@ interface Test {
   doTest: (pool: Client) => Promise<void>;
   rowCount?: number;
   restrict?: string;
-  edgeType?: string;
+  edgeName?: string;
 }
 
 async function doTest(t: Test) {
@@ -60,8 +60,8 @@ async function doTest(t: Test) {
     if (t.restrict) {
       parts.push('--restrict', t.restrict);
     }
-    if (t.edgeType) {
-      parts.push('--edgeType', t.edgeType);
+    if (t.edgeName) {
+      parts.push('--edgeName', t.edgeName);
     }
     const r = execSync(parts.join(" "));
     //    console.log(r.toString())
@@ -435,7 +435,7 @@ describe('edges', () => {
         assoc_edge_table("user_friends_edges"),
       ],
       path: "fixtures/edges",
-      edgeType: "UserToFriendsEdge",
+      edgeName: "UserToFriendsEdge",
       rowCount: 10,
       preTest: createEdges,
       doTest: async (pool: Client) => {
@@ -466,7 +466,7 @@ describe('edges', () => {
         assoc_edge_table("user_followers_edges"),
       ],
       path: "fixtures/edges",
-      edgeType: "UserToFollowersEdge",
+      edgeName: "UserToFollowersEdge",
       rowCount: 10,
       preTest: createEdges,
       doTest: async (pool: Client) => {
@@ -513,7 +513,7 @@ describe('edges', () => {
         assoc_edge_table("event_hosts_edge"),
       ],
       path: "fixtures/edges",
-      edgeType: "EventToHostsEdge",
+      edgeName: "EventToHostsEdge",
       rowCount: 10,
       preTest: createEdges,
       doTest: async (pool: Client) => {
