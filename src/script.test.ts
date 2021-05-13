@@ -127,18 +127,44 @@ function getRequestOutcomeTable() {
   return table("request_outcomes", text("outcome", { primaryKey: true }))
 }
 
-function getForeignKeyTables() {
-  // this sadly has to be created separately from the fixtures (for now...)
-
-  return [getBaseUserTable(), getContactsTable()];
-}
-
 function getUniqueTables() {
   // this sadly has to be created separately from the fixtures (for now...)
 
   return [getBaseUserTable(), getContactsTable(uniqueIndex('user_id'))];
 }
 
+function getForeignKeySuperNestedTables() {
+  // this sadly has to be created separately from the fixtures (for now...)
+
+  return [
+    table("users",
+      uuid("id", { primaryKey: true }),
+      timestamp("created_at"),
+      timestamp("updated_at"),
+      text("first_name"),
+      text("last_name"),
+      text("default_profile"),
+    ),
+    getEventsTable(),
+    table("event_addresses",
+      uuid("id", { primaryKey: true }),
+      timestamp("created_at"),
+      timestamp("updated_at"),
+      text("street"),
+      text("city"),
+      text("state"),
+      text("zip_code"),
+      text("apartment", { nullable: true }),
+      uuid("owner_id", { foreignKey: { table: "events", col: "id" } }),
+    ),
+    table("profiles",
+      uuid("id", { primaryKey: true }),
+      timestamp("created_at"),
+      timestamp("updated_at"),
+      text("name"),
+    ),
+  ];
+}
 
 function getAddressesTable(...constraints: SchemaItem[]) {
   return table("addresses",
@@ -170,24 +196,40 @@ test("simple schema", async () => {
   })
 })
 
-test("foreign key schema", async () => {
+
+// this encompasses foreign keys, restrict without dependency, fkey super nested
+test("foreign key super nested", async () => {
   await doTest({
-    tables: getForeignKeyTables(),
+    tables: getForeignKeySuperNestedTables(),
     path: "fixtures/foreign_key",
+    restrict: "EventAddress",
     rowCount: 10,
     doTest: async (pool: Client) => {
-      const r = await pool.query("SELECT count(1) from users")
+      const r = await pool.query("SELECT count(1) from event_addresses")
       expect(r.rowCount).toBe(1)
       const row = r.rows[0];
-      expect(row.count).toBe("10")
+      expect(parseInt(row.count, 10)).toBeGreaterThanOrEqual(10)
 
-      const r2 = await pool.query("SELECT count(1) from contacts")
+      const r2 = await pool.query("SELECT count(1) from events")
       expect(r2.rowCount).toBe(1)
       const row2 = r2.rows[0];
-      expect(parseInt(row2.count, 10)).toBeGreaterThanOrEqual(10);
+      expect(parseInt(row2.count, 10)).toBeGreaterThanOrEqual(1);
+
+      const r3 = await pool.query("SELECT count(1) from users")
+      expect(r3.rowCount).toBe(1)
+      const row3 = r3.rows[0];
+      expect(parseInt(row3.count, 10)).toBeGreaterThanOrEqual(1);
+
+
+      const r4 = await pool.query("SELECT count(1) from profiles")
+      expect(r4.rowCount).toBe(1)
+      const row4 = r4.rows[0];
+      expect(parseInt(row4.count, 10)).toBeGreaterThanOrEqual(1);
+
     }
   })
 })
+
 
 test("unique", async () => {
   await doTest({
@@ -203,28 +245,6 @@ test("unique", async () => {
       const r2 = await pool.query("SELECT count(1) from contacts")
       expect(r2.rowCount).toBe(1)
       const row2 = r2.rows[0];
-      expect(parseInt(row2.count, 10)).toBeGreaterThanOrEqual(10);
-    }
-  })
-})
-
-test("restrict without dependency included", async () => {
-  await doTest({
-    tables: getForeignKeyTables(),
-    path: "fixtures/foreign_key",
-    rowCount: 10,
-    // only do contact. we'll load some users because contacts needs it
-    restrict: "Contact",
-    doTest: async (pool: Client) => {
-      const r = await pool.query("SELECT count(1) from users")
-      expect(r.rowCount).toBe(1)
-      const row = r.rows[0];
-      expect(row.count).toBe("4")
-
-      const r2 = await pool.query("SELECT count(1) from contacts")
-      expect(r2.rowCount).toBe(1)
-      const row2 = r2.rows[0];
-      // we doing the ceiling approach so may end up with slightly more than one...
       expect(parseInt(row2.count, 10)).toBeGreaterThanOrEqual(10);
     }
   })

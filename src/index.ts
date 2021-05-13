@@ -1,8 +1,6 @@
 import minimist from "minimist";
 import { execSync } from "child_process"
-import { getValue } from "./value"
-import { DBType, Field, Schema, AssocEdge, AssocEdgeGroup, InverseAssocEdge } from "@lolopinto/ent/schema";
-import { snakeCase } from "snake-case";
+import { DBType, Field, AssocEdge, InverseAssocEdge } from "@lolopinto/ent/schema";
 import { pascalCase } from "pascal-case"
 import { Data } from "@lolopinto/ent";
 import * as fs from "fs"
@@ -12,6 +10,9 @@ import pg from "pg"
 import pluralize from "pluralize"
 import Graph from "graph-data-structure";
 import { inspect } from "util"
+import { snakeCase } from "snake-case";
+import { Info, dependency, EdgeInfo, ProcessedSchema, ParsedSchema, QueryInfo } from "./interfaces"
+import { getDbColFromName, getDbCol, generateBulkRows } from "./row";
 
 const scriptPath = "./node_modules/@lolopinto/ent/scripts/read_schema";
 
@@ -92,95 +93,6 @@ async function main() {
   console.log(summaries.join("\n"))
 }
 
-
-function getDbColFromName(name: string): string {
-  return snakeCase(name).toLowerCase();
-}
-
-function getDbCol(field: Field): string {
-  return field.storageKey || getDbColFromName(field.name);
-}
-
-function getRow(fields: Field[], infos: Map<string, Info>, partial?: {}, derivedIDType?: string): Data {
-  partial = partial || {};
-  const ret = {};
-  for (const field of fields) {
-    const col = getDbCol(field);
-    if (partial[col] !== undefined) {
-      ret[col] = partial[col];
-    } else {
-      ret[col] = getValue(field, col, infos);
-    }
-
-    if (field.derivedFields) {
-      let type: string;
-      if (field.name.endsWith("_id")) {
-        let idx = field.name.indexOf("_id");
-        type = field.name.substring(0, idx) + "_type";
-
-      } else if (field.name.endsWith("ID")) {
-        let idx = field.name.indexOf("ID");
-        type = field.name.substring(0, idx) + "Type";
-      } else {
-        throw new Error(`unsupported field ${field.name} with derived fields`)
-      }
-      for (const f2 of field.derivedFields) {
-        if (f2.name !== type) {
-          throw new Error(`unsupported derived field with name ${f2.name}`)
-        }
-        if (!derivedIDType) {
-          //          console.log(ret, partial)
-          //          console.trace()
-
-          throw new Error(`cannot set field ${f2.name} without derivedIDType being passed in ${inspect(ret, undefined, 4)} ${inspect(partial, undefined, 4)}`);
-        }
-        ret[getDbCol(f2)] = derivedIDType;
-      }
-    }
-  }
-  return ret;
-}
-
-function getPartialRow(
-  deps: dependency[],
-  info: Info,
-  infos: Map<string, Info>,
-  globalRows: Map<string, Data[]>,
-  i: number,
-) {
-  let partialRow = {};
-  let derivedIDType: string | undefined;
-
-  for (const deps3 of deps) {
-    const depSchema = deps3.schema;
-    let schema: string;
-
-    // polymorphic types.
-    if (Array.isArray(depSchema)) {
-      const idx = Math.floor(Math.random() * depSchema.length);
-      schema = depSchema[idx];
-      derivedIDType = schema;
-    } else if (depSchema === "*") {
-      // wildcard polymorphic
-
-      schema = findStarSchema(infos);
-      derivedIDType = schema;
-
-    } else {
-      // common case.
-      schema = depSchema;
-    }
-
-    const row = getRowFor(infos, globalRows, schema, i, derivedIDType);
-    const val = row[deps3.inverseCol];
-    if (val === undefined) {
-      throw new Error(`got undefined for col ${deps3.inverseCol} in row at index ${i} in table ${info.tableName}`);
-    }
-    partialRow[deps3.col] = val;
-  }
-  return { partialRow, derivedIDType };
-}
-
 function ensureDir() {
   const dir = path.join(process.cwd(), `/data/inserts`);
   if (!fs.existsSync(dir)) {
@@ -192,43 +104,6 @@ function ensureDir() {
 function cleanup() {
   let dir = path.join(process.cwd(), `/data`);
   fs.rmSync(dir, { force: true, recursive: true })
-}
-
-interface Info {
-  name: string;
-  schema: Schema;
-  path: string;
-  cols: string[];
-  tableName: string;
-  generate: boolean;
-}
-
-interface dependency {
-  schema: string | string[]; // * wildcard, randomly pick one...
-  col: string;
-  unique?: boolean;
-  inverseCol: string;
-}
-
-interface EdgeInfo {
-  id1Type: string;
-  id2Type: string;
-  symmetric: boolean;
-  edgeName: string;
-  inverseEdge?: string;
-}
-
-interface ProcessedSchema extends Schema {
-  assocEdges: AssocEdge[];
-  assocEdgeGroups: AssocEdgeGroup[];
-}
-
-interface ParsedSchema {
-  infos: Map<string, Info>;
-  allEdges: Map<string, EdgeInfo>;
-  graph: any; // result of Graph()
-  deps: Map<string, dependency[]>;
-  rootDir: string;
 }
 
 function parseSchema(schemaPath: string, dir: string): ParsedSchema {
@@ -387,7 +262,7 @@ function parseSchema(schemaPath: string, dir: string): ParsedSchema {
 
 async function generateRows(parsedSchema: ParsedSchema, rowCount: number): Promise<Map<string, Data[]>> {
   const { graph, infos, deps } = parsedSchema;
-  const order = graph.topologicalSort(graph.nodes());
+  const order: string[] = graph.topologicalSort(graph.nodes());
   // console.log(order)
   // console.log(deps)
 
@@ -407,12 +282,14 @@ async function generateRows(parsedSchema: ParsedSchema, rowCount: number): Promi
     }
 
     generateBulkRows(
-      key,
-      deps,
-      rowCount,
-      infos,
-      info,
-      globalRows,
+      parsedSchema,
+      {
+        schema: key,
+        rowCount,
+        globalRows,
+        info,
+        summaries,
+      }
     )
   }
 
@@ -470,13 +347,15 @@ async function generateEdges(
 
   // pregenerate id2s 
   const obj2s = generateBulkRows(
-    id2Type,
-    deps,
-    Math.ceil(rowCount / 2),
-    infos,
-    id2Info,
-    globalRows,
-    true,
+    parsedSchema,
+    {
+      schema: id2Type,
+      rowCount: Math.ceil(rowCount / 2),
+      info: id2Info,
+      disableSummary: true,
+      globalRows,
+      summaries,
+    }
   )
 
   let start = rowCount;
@@ -491,13 +370,15 @@ async function generateEdges(
     //  Math.ceil(Math.log2(rowCount)),
     // so we just generate "bulk" of 1 each time.
     const obj1s = generateBulkRows(
-      id1Type,
-      deps,
-      1,
-      infos,
-      id1Info,
-      globalRowsID1s,
-      true,
+      parsedSchema,
+      {
+        schema: id1Type,
+        info: id1Info,
+        rowCount: 1,
+        globalRows: globalRowsID1s,
+        disableSummary: true,
+        summaries,
+      }
     )
     const obj1 = obj1s[0]
 
@@ -566,71 +447,6 @@ async function generateEdges(
       cols: ["id1", "id1_type", "edge_type", "id2", "id2_type", "time", "data"],
     }
   };
-}
-
-function generateBulkRows(
-  key: string,
-  deps: Map<string, dependency[]>,
-  rowCount: number,
-  infos: Map<string, Info>,
-  info: Info,
-  globalRows: Map<string, Data[]>,
-  disableSummary?: boolean,
-) {
-  const fields = info.schema.fields;
-  let deps2 = deps.get(key);
-  let rows: Data[] = [];
-
-  // no dependencies, simple...
-  if (!deps2) {
-    // no dep
-    for (let i = 0; i < rowCount; i++) {
-      const row = getRow(fields, infos);
-      rows.push(row);
-    }
-    if (!disableSummary) {
-      summaries.push(`${rowCount} rows created in table ${info.tableName}`);
-    }
-  } else {
-    // dependencies
-
-    const unique = deps2.some(dep => dep.unique);
-    // has a unique field so just create a new one every time
-    if (unique) {
-      for (let i = 0; i < rowCount; i++) {
-        const { partialRow, derivedIDType } = getPartialRow(deps2, info, infos, globalRows, i);
-        const row = getRow(fields, infos, partialRow, derivedIDType);
-        rows.push(row);
-      }
-      if (!disableSummary) {
-        summaries.push(`${rowCount} rows created in table ${info.tableName}`);
-      }
-    } else {
-
-      let start = rowCount;
-      let i = -1;
-      do {
-        start = Math.ceil(start / 2);
-        i++;
-
-        const { partialRow, derivedIDType } = getPartialRow(deps2, info, infos, globalRows, i);
-
-        for (let j = 0; j < start; j++) {
-          const row = getRow(fields, infos, partialRow, derivedIDType);
-          rows.push(row);
-        }
-        if (!disableSummary) {
-          let summary = `${start} rows created in table ${info.tableName} with commonality: ${inspect(partialRow, undefined, 2)}`;
-          if (derivedIDType) {
-            summary += ` of polymorphic type ${derivedIDType}`;
-          }
-          summaries.push(summary);
-        }
-      } while (start > 1);
-    }
-  }
-  globalRows.set(info.tableName, rows)
-  return rows;
 }
 
 async function writeFiles(
@@ -724,57 +540,8 @@ async function writeQueries(
   }
 }
 
-function findStarSchema(infos: Map<string, Info>) {
-  while (true) {
-    const keys = Array.from(infos.keys());
-    const idx = Math.floor(Math.random() * keys.length);
-    let schema = keys[idx]
-    const info = infos.get(schema);
-    if (!info) {
-      throw new Error(`couldn't find info for schema ${schema}`)
-    }
-    // found schema...
-    if (info.cols.find((v) => v == "id") !== undefined) {
-      //                console.log('found schema', schema)
-      return schema;
-    }
-  }
-}
-
-interface QueryInfo {
-  tableName: string;
-  cols: string[];
-  path: string;
-}
-
 function generateQuery(info: QueryInfo): string {
   return `COPY ${info.tableName}(${info.cols.join(",")}) FROM '${info.path}' CSV HEADER;`;
-}
-
-
-function getRowFor(
-  infos: Map<string, Info>,
-  globalRows: Map<string, Data[]>,
-  schema: string,
-  i: number,
-  derivedIDType?: string,
-) {
-  const info = infos.get(schema);
-  if (!info) {
-    throw new Error(`couldn't get info for schema: ${schema}`);
-  }
-  const rows = globalRows.get(info.tableName) || [];
-  const row = rows[i];
-  if (row) {
-    return row;
-  }
-  // dependency...
-
-  // create a new one...
-  const newRow = getRow(info.schema.fields, infos, undefined, derivedIDType);
-  rows.push(newRow);
-  globalRows.set(info.tableName, rows)
-  return newRow;
 }
 
 function getEdgeName(sourceNode: string, assocEdge: AssocEdge): string {

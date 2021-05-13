@@ -19,14 +19,4 @@ export default class Event extends BaseEntSchema implements Schema {
     TimestampType({ name: "end_time", nullable: true }),
 
   ];
-
-  edges: Edge[] = [
-    {
-      name: "hosts",
-      schemaName: "User",
-      inverseEdge: {
-        name: "userToHostedEvents",
-      },
-    },
-  ];
 }
