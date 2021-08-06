@@ -1,8 +1,8 @@
 import { Info, dependency, EdgeInfo, ProcessedSchema, ParsedSchema, QueryInfo } from "./interfaces"
-import { DBType, Field, AssocEdge, InverseAssocEdge } from "@lolopinto/ent/schema";
+import { DBType, Field, AssocEdge, InverseAssocEdge } from "@snowtop/ent/schema";
 import { getValue } from "./value"
 import { snakeCase } from "snake-case";
-import { Data } from "@lolopinto/ent";
+import { Data } from "@snowtop/ent";
 import { inspect } from "util"
 
 export function getDbColFromName(name: string): string {

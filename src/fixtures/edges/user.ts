@@ -4,7 +4,7 @@ import {
   BaseEntSchema,
   Edge,
   StringType,
-} from "@lolopinto/ent/schema";
+} from "@snowtop/ent/schema";
 
 export default class User extends BaseEntSchema implements Schema {
   fields: Field[] = [

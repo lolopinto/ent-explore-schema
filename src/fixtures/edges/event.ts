@@ -6,7 +6,7 @@ import {
   StringType,
   TimestampType,
   UUIDType,
-} from "@lolopinto/ent/schema/";
+} from "@snowtop/ent/schema/";
 
 export default class Event extends BaseEntSchema implements Schema {
   fields: Field[] = [

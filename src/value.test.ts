@@ -1,4 +1,4 @@
-import { IntegerType, FieldOptions, StringOptions, StringType, TimestampType, FloatType, BooleanType, UUIDType, TimeType, TimetzType, TimestamptzType, DateType, EnumType, Schema, Field } from "@lolopinto/ent";
+import { IntegerType, FieldOptions, StringOptions, StringType, TimestampType, FloatType, BooleanType, UUIDType, TimeType, TimetzType, TimestamptzType, DateType, EnumType, Schema, Field } from "@snowtop/ent";
 import bcryptjs from "bcryptjs"
 import { getValue } from "./value";
 import { validate as validateUUid } from "uuid"

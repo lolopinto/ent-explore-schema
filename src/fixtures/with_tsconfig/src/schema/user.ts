@@ -3,7 +3,7 @@ import {
   Field,
   BaseEntSchema,
   StringType,
-} from "@lolopinto/ent/schema";
+} from "@snowtop/ent/schema";
 import { Enum } from "src/enum";
 
 export default class User extends BaseEntSchema implements Schema {

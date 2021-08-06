@@ -1,4 +1,4 @@
-import { Schema, Field, StringType } from "@lolopinto/ent/schema";
+import { Schema, Field, StringType } from "@snowtop/ent/schema";
 
 export default class RequestOutcome implements Schema {
   fields: Field[] = [

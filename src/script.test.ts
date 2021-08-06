@@ -1,4 +1,4 @@
-import { Table, table, TempDB, text, timestamp, uuid, assoc_edge_config_table, assoc_edge_table } from "@lolopinto/ent/testutils/db/test_db"
+import { Table, table, CoreConcept, TempDB, text, timestamp, uuid, assoc_edge_config_table, assoc_edge_table, uniqueIndex, enumType, enumCol } from "@snowtop/ent/testutils/db/test_db"
 import { execSync } from "child_process"
 import * as path from "path"
 import { Client } from "pg"
@@ -7,7 +7,7 @@ import { v4 } from "uuid";
 let tdb: TempDB;
 
 beforeAll(async () => {
-  tdb = new TempDB();
+  tdb = new TempDB([]);
   await tdb.beforeAll()
 });
 
@@ -18,7 +18,7 @@ afterAll(async () => {
 interface Test {
   // needs to be passed in order of how it should be created.
   // will be dropped in reverse order...
-  tables: Table | Table[];
+  tables: CoreConcept | CoreConcept[];
   path: string;
   preTest?: (pool: Client) => Promise<void>;
   doTest: (pool: Client) => Promise<void>;
@@ -28,7 +28,7 @@ interface Test {
 }
 
 async function doTest(t: Test) {
-  let tables: Table[] = []
+  let tables: CoreConcept[] = []
   if (Array.isArray(t.tables)) {
     tables = t.tables
   } else {
@@ -39,7 +39,7 @@ async function doTest(t: Test) {
     await tdb.create(...tables)
 
     const connString = process.env.DB_CONNECTION_STRING;
-    const client = tdb.getDBClient();
+    const client = tdb.getPostgresClient();
 
     if (t.preTest) {
       await t.preTest(client)
@@ -103,14 +103,6 @@ interface SchemaItem {
   name: string;
 }
 
-function uniqueIndex(col) {
-  return {
-    name: "",//ignore...
-    generate() {
-      return `UNIQUE (${col})`;
-    },
-  };
-}
 function getContactsTable(...constraints: SchemaItem[]) {
   return table("contacts",
     uuid("id", { primaryKey: true }),
@@ -284,24 +276,7 @@ test("enum table with dbrows", async () => {
 test("enum type", async () => {
   const values = ["'UNVERIFIED'", "'VERIFIED'", "'DEACTIVATED'", "'DISABLED'"];
 
-  // TODO support these in temp_db
-  //  https://github.com/lolopinto/ent/issues/297
-  const fakeEnumTable: Table = {
-    name: "user_status",
-    columns: [],
-    drop() {
-      return `DROP TYPE user_status`;
-    },
-    create() {
-      return `CREATE TYPE user_status as ENUM(${values.join(", ")})`;
-    },
-  }
-  const enumTypeCol = {
-    name: "status",
-    datatype() {
-      return 'user_status'
-    },
-  };
+  const userStatusType = enumType("user_status", values);
 
   const userTable = table("users",
     uuid("id", { primaryKey: true }),
@@ -309,11 +284,11 @@ test("enum type", async () => {
     timestamp("updated_at"),
     text("first_name"),
     text("last_name"),
-    enumTypeCol,
+    enumCol('status', userStatusType.name),
   );
 
   await doTest({
-    tables: [fakeEnumTable, userTable],
+    tables: [userStatusType, userTable],
     path: "fixtures/with_enum_type",
     rowCount: 10,
     doTest: async (pool: Client) => {

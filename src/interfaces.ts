@@ -1,4 +1,4 @@
-import { Schema, AssocEdge, AssocEdgeGroup } from "@lolopinto/ent/schema";
+import { Schema, AssocEdge, AssocEdgeGroup } from "@snowtop/ent/schema";
 
 export interface Info {
   name: string;

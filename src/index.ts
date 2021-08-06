@@ -1,8 +1,8 @@
 import minimist from "minimist";
 import { execSync } from "child_process"
-import { DBType, Field, AssocEdge, InverseAssocEdge } from "@lolopinto/ent/schema";
+import { DBType, Field, AssocEdge, InverseAssocEdge } from "@snowtop/ent/schema";
 import { pascalCase } from "pascal-case"
-import { Data } from "@lolopinto/ent";
+import { Data } from "@snowtop/ent";
 import * as fs from "fs"
 import * as path from "path"
 import { writeToStream } from '@fast-csv/format';
@@ -14,7 +14,7 @@ import { snakeCase } from "snake-case";
 import { Info, dependency, EdgeInfo, ProcessedSchema, ParsedSchema, QueryInfo } from "./interfaces"
 import { getDbColFromName, getDbCol, generateBulkRows } from "./row";
 
-const scriptPath = "./node_modules/@lolopinto/ent/scripts/read_schema";
+const scriptPath = "./node_modules/@snowtop/ent/scripts/read_schema";
 
 // default is 10000 if doing all the objects...
 // recommended to pass rowCount and restrict if we want a large number e.g. 100,000+

@@ -1,9 +1,9 @@
 import { parsePhoneNumberFromString } from "libphonenumber-js";
-import { DBType, Field, Schema, Type } from "@lolopinto/ent/schema"
+import { DBType, Field, Schema, Type } from "@snowtop/ent/schema"
 import { v4 } from "uuid";
-import { DateType, TimeType, TimetzType, TimestampType, TimestamptzType, } from "@lolopinto/ent/schema"
-import { EmailType } from "@lolopinto/ent-email"
-import { PhoneNumberType } from "@lolopinto/ent-phonenumber";
+import { DateType, TimeType, TimetzType, TimestampType, TimestamptzType, } from "@snowtop/ent/schema"
+import { EmailType } from "@snowtop/ent-email"
+import { PhoneNumberType } from "@snowtop/ent-phonenumber";
 
 function random(): string {
   return Math.random()

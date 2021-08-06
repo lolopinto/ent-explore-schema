@@ -16,7 +16,7 @@
     "paths": {
       // TODO
       "ent/*": [
-        "@lolopinto/ent/*",
+        "@snowtop/ent/*",
       ],
       "src/*": [
         "./src/*"

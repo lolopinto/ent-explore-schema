@@ -4,7 +4,7 @@ import {
   BaseEntSchema,
   StringType,
   UUIDType,
-} from "@lolopinto/ent/schema";
+} from "@snowtop/ent/schema";
 
 export default class Contact extends BaseEntSchema implements Schema {
   fields: Field[] = [
